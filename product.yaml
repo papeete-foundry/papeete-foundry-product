@@ -1,0 +1,19 @@
+product: foundry
+version: "0.1.0"
+environment:
+  type: k8s
+  name: foundry-local
+  k8sName: docker-desktop
+actors:
+  - name: BNK.RLVR.CAP.SUP.002.BEN-implementation
+    label: alpha
+    version: latest
+    recipe: develop
+  - name: BNK.RLVR.CAP.SUP.002.BEN-task-orchestration
+    label: alpha
+    version: latest
+    recipe: develop
+  - name: BNK.RLVR.CAP.SUP.002.BEN-testing
+    label: alpha
+    version: latest
+    recipe: develop

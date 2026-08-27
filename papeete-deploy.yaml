@@ -1,0 +1,21 @@
+# papeete-deploy's own config (papeete_deploy.actor_source.CONFIG_FILENAME) — read only from a
+# file of this exact name, sibling to product.yaml. Needed here because none of this product's
+# actors live in a folder that is itself a sibling of product.yaml (papeete-deploy's zero-config
+# convention): each actor's repo now shares its exact declared `name` (each `actor.yaml` names
+# itself after its own repo), but those repos live as siblings of THIS repo, not as folders
+# inside it — so every actor still needs an explicit override, name match or not.
+#
+# Every `path` below is resolved relative to the current working directory at invocation time
+# (papeete_deploy.actor_source.resolve_actor_folder), not to this file's own location — run
+# `papeete-deploy` from this repo's root (where this file and product.yaml both live), per
+# deploy/README.md.
+actorDeployOverrides:
+  - actor: BNK.RLVR.CAP.SUP.002.BEN-implementation
+    type: local
+    path: ../BNK.RLVR.CAP.SUP.002.BEN-implementation
+  - actor: BNK.RLVR.CAP.SUP.002.BEN-task-orchestration
+    type: local
+    path: ../BNK.RLVR.CAP.SUP.002.BEN-task-orchestration
+  - actor: BNK.RLVR.CAP.SUP.002.BEN-testing
+    type: local
+    path: ../BNK.RLVR.CAP.SUP.002.BEN-testing

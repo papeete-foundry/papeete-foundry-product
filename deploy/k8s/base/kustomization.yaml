@@ -1,0 +1,7 @@
+# papeete-foundry-product — placeholder for resources shared across every actor (a dashboard,
+# say). Empty for now: papeete-deploy's own `_overlay_dir()` only requires this folder to exist
+# once `environment.recipe` opts the product into product-level deploy (papeete-deploy's
+# ADR-PD-0004) — nothing renders it yet.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources: []
