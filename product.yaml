@@ -4,6 +4,7 @@ environment:
   type: k8s
   name: foundry-local
   k8sName: docker-desktop
+  recipe: develop
 actors:
   # BNK.RLVR.CAP.SUP.002.BEN-implementation and BNK.RLVR.CAP.SUP.002.BEN-testing are deliberately NOT
   # listed here — Docker Desktop's Kubernetes node has no docker.sock reachable by any hostPath

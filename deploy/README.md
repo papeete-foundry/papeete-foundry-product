@@ -30,9 +30,17 @@ Each actor image must already exist in the local Docker daemon, tagged
 `<name>:<version>-<label>-<shortSha>` (`papeete-actor build`, run in that actor's own repo) —
 Docker Desktop's Kubernetes node shares that same daemon's image store, so no push step is needed.
 
-## k8s/ here — product-level resources (still inert)
+## k8s/ here — product-level resources
 
-`k8s/base` + `k8s/overlays/develop` are a placeholder for resources shared across every actor —
-a dashboard, say — per `papeete-deploy`'s own README, "Product-level resources". They stay inert
-until `product.yaml`'s `environment` also sets a top-level `recipe`, opting the product into them
-(`ADR-PD-0004`) — not set here, since nothing product-level exists to deploy yet.
+`k8s/base` + `k8s/overlays/develop` are this product's own resources, shared across every actor —
+per `papeete-deploy`'s own README, "Product-level resources" (`ADR-PD-0004`). `product.yaml`'s
+`environment.recipe: develop` opts the product into them, so a plain `papeete-deploy deploy`
+applies this folder's `develop` overlay to `foundry-local` alongside every actor's own.
+
+Right now that's one thing: a Grafana dashboard ConfigMap (`grafana-dashboard-configmap.yaml`)
+covering every `BNK.RLVR.CAP.SUP.002.BEN` actor together — logs and recent traces, filtered by an
+`$service` template variable, the "template-variable drill-down between them" the ADR itself
+motivates this feature with. It carries the `grafana_dashboard: "1"` label observability's own
+Grafana sidecar already watches cluster-wide (`NAMESPACE=ALL`), so no Grafana-side config change
+is needed — dropping the ConfigMap into `foundry-local` is enough. Its two datasources (`loki`,
+`tempo`) are observability's own, not invented here.

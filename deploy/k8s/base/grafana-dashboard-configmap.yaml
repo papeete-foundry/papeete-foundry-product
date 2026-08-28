@@ -1,0 +1,107 @@
+# The product-level resource ADR-PD-0004's own README example names directly: "a consumer
+# product ... wants a Grafana dashboard ConfigMap describing both actors together, with a
+# template-variable drill-down between them". `grafana_dashboard: "1"` is the label
+# observability's own Grafana sidecar (grafana-sc-dashboard, METHOD=WATCH, NAMESPACE=ALL) already
+# watches cluster-wide — dropping this ConfigMap into any namespace is enough, no Grafana-side
+# config change needed. Datasource uids ("loki", "tempo") come straight from observability's own
+# `grafana` ConfigMap (`datasources.yaml`) — this dashboard invents no new datasource.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-bnk-rlvr-cap-sup-002-ben
+  labels:
+    grafana_dashboard: "1"
+data:
+  bnk-rlvr-cap-sup-002-ben-pipeline.json: |
+    {
+      "title": "BNK.RLVR.CAP.SUP.002.BEN pipeline",
+      "uid": "bnk-rlvr-cap-sup-002-ben-pipeline",
+      "tags": ["bnk-rlvr-cap-sup-002-ben", "papeete-foundry"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "time": { "from": "now-6h", "to": "now" },
+      "refresh": "30s",
+      "templating": {
+        "list": [
+          {
+            "name": "service",
+            "type": "custom",
+            "label": "Actor",
+            "multi": true,
+            "includeAll": true,
+            "current": { "text": "All", "value": "$__all" },
+            "query": "BNK.RLVR.CAP.SUP.002.BEN-implementation,BNK.RLVR.CAP.SUP.002.BEN-testing,BNK.RLVR.CAP.SUP.002.BEN-task-orchestration",
+            "options": [
+              { "text": "BNK.RLVR.CAP.SUP.002.BEN-implementation", "value": "BNK.RLVR.CAP.SUP.002.BEN-implementation" },
+              { "text": "BNK.RLVR.CAP.SUP.002.BEN-testing", "value": "BNK.RLVR.CAP.SUP.002.BEN-testing" },
+              { "text": "BNK.RLVR.CAP.SUP.002.BEN-task-orchestration", "value": "BNK.RLVR.CAP.SUP.002.BEN-task-orchestration" }
+            ]
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Log volume by actor",
+          "type": "timeseries",
+          "datasource": { "type": "loki", "uid": "loki" },
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "loki", "uid": "loki" },
+              "expr": "sum by (service_name) (count_over_time({service_name=~\"$service\"} [$__interval]))",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Logs",
+          "type": "logs",
+          "datasource": { "type": "loki", "uid": "loki" },
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 8 },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "loki", "uid": "loki" },
+              "expr": "{service_name=~\"$service\"}",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Recent traces",
+          "type": "traces",
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "gridPos": { "h": 10, "w": 12, "x": 0, "y": 18 },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "tempo", "uid": "tempo" },
+              "queryType": "traceql",
+              "query": "{resource.service.name=~\"$service\"}",
+              "limit": 20
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Errors",
+          "type": "traces",
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "gridPos": { "h": 10, "w": 12, "x": 12, "y": 18 },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "tempo", "uid": "tempo" },
+              "queryType": "traceql",
+              "query": "{resource.service.name=~\"$service\" && status=error}",
+              "limit": 20
+            }
+          ]
+        }
+      ]
+    }
