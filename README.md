@@ -13,8 +13,11 @@ actors, named here by identity and a version query alone, never a path or a pre-
 Resolving these queries against a real registry and actually running them is
 [`papeete-deploy`](https://github.com/papeete-hub/papeete-deploy)'s job — see [`deploy/`](./deploy).
 
-`product.yaml`'s `environment.type` is `k8s`, targeting `docker-desktop`'s local Kubernetes (its
-node shares the host's own local image store, so nothing needs pushing to a separate registry).
+`product.yaml`'s `environment.type` is `k8s`, targeting `docker-desktop`'s local Kubernetes. Every
+actor image is pulled from an Azure Container Registry, and two of the three build the
+capability's own component images in the cluster's shared buildkitd rather than against any
+Docker daemon — see [`deploy/`](./deploy) for the prerequisites that implies.
+
 Each actor's declared `name` now matches its own repo exactly, but none of the three live in a
 folder that is itself a sibling of `product.yaml` (they're siblings of *this repo*, not folders
 inside it) — so `papeete-deploy`'s zero-config sibling convention still can't find them, and

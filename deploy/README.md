@@ -7,18 +7,39 @@ Deploys `papeete-foundry-product` — resolves each actor named in
 ```bash
 pip install papeete-deploy
 
-papeete-deploy resolve   product.yaml
-papeete-deploy deploy    product.yaml
+papeete-deploy resolve   product.yaml --registry acr --acr-name papeetefoundry
+papeete-deploy deploy    product.yaml --registry acr --acr-name papeetefoundry
 papeete-deploy undeploy  product.yaml
 ```
+
+## Prerequisites
+
+Three things have to exist before a first deploy, none of them per-actor:
+
+1. **A registry, and a builder.** `papeete-platform`'s `examples/acr-local` creates the ACR plus
+   its push and pull tokens; `examples/buildkit-local` runs rootless buildkitd and hands it the
+   push credential (`ADR-PL-0002`). Two of the three actors build the capability's component
+   images through that builder — no Docker daemon is involved, and no node exposes a socket.
+2. **The `acr-pull` Secret in `foundry-local`.** Every actor references it as `imagePullSecrets`,
+   and `task-orchestration` copies it into each ephemeral `test-<task_id>` namespace it creates.
+3. **The four token Secrets** each building actor reads (`…-github`, `…-claude` per actor, plus
+   `task-orchestration`'s own). `../../GetSecrets.sh` creates all of these, including `acr-pull`,
+   and is TTY-only by design so no credential passes through an assistant's context.
+
+On Docker Desktop specifically, the node also needs one `hosts.toml` taking the registry out of
+its pull-through mirror's path — `examples/acr-local` writes it, and its README explains why the
+mirror cannot serve a private registry. No other cluster needs it.
 
 Run these **from this repo's root** (where `product.yaml` and `../papeete-deploy.yaml` both
 live) — `papeete-deploy.yaml`'s `actorDeployOverrides` paths resolve relative to the current
 working directory at invocation time, not to the config file's own location.
 
 `product.yaml`'s `environment.type` is `k8s`, targeting `docker-desktop` — Docker Desktop's local
-Kubernetes, the only target `papeete-deploy` verifies against; its node shares the host's own
-local Docker image store, so nothing needs pushing to a separate registry. `deploy` applies each
+Kubernetes, the only target `papeete-deploy` verifies against. Its node does not, as this file
+once claimed, share the host's Docker image store: what it actually has is a **pull-through
+mirror**, `kind-registry-mirror`, declared in the node's own `certs.d/_default/hosts.toml` and
+backed by the host's containerd store. The distinction matters, because that mirror cannot serve
+a private registry at all. `deploy` applies each
 actor's own `deploy/k8s/overlays/develop` (in that actor's own repo — see `../papeete-deploy.yaml`
 for where each one actually lives) to the `foundry-local` namespace, creating it if missing, never
 deleting it. Every object `deploy` applies is renamed with a `foundry-` prefix, so a sibling actor
@@ -26,9 +47,11 @@ is reachable in-cluster only under its *prefixed* Service name (`foundry-<that a
 name>`, never the bare one) — each actor's own `deploy/k8s/base/deployment.yaml` that calls a
 sibling by name already accounts for this.
 
-Each actor image must already exist in the local Docker daemon, tagged
-`<name>:<version>-<label>-<shortSha>` (`papeete-actor build`, run in that actor's own repo) —
-Docker Desktop's Kubernetes node shares that same daemon's image store, so no push step is needed.
+Each actor image must already exist in the registry, tagged
+`<version>-<label>-<shortSha>`, under `foundry/<the actor's own normalized name>` — the product's
+own name is the repository prefix (`papeete-deploy`'s `ADR-PD-0006`), and the wrapper
+kustomization rewrites each base manifest's bare image name to that repository at apply time, so
+no actor's own manifest ever names a registry.
 
 ## k8s/ here — product-level resources
 
