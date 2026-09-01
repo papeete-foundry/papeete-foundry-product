@@ -10,7 +10,25 @@ pip install papeete-deploy
 papeete-deploy resolve   product.yaml --registry acr --acr-name papeetefoundry
 papeete-deploy deploy    product.yaml --registry acr --acr-name papeetefoundry
 papeete-deploy undeploy  product.yaml
+papeete-deploy undeploy  product.yaml --delete-namespace   # an ephemeral instance (ADR-PD-0007)
 ```
+
+## Standing the product up more than once
+
+Nothing here is allocated, so the same product can exist N times over — a per-PR instance beside
+the long-lived one. Point `environment.name` at another namespace, seed that namespace's Secrets,
+and deploy:
+
+```bash
+sed 's/^  name: foundry-local$/  name: foundry-pr123/' product.yaml > product-pr123.yaml
+../GetSecrets.sh --k8s --namespace foundry-pr123
+papeete-deploy deploy product-pr123.yaml --registry acr --acr-name papeetefoundry
+```
+
+Both namespaces then run identical Service names without colliding, because a Service name is
+namespaced and no host port is involved anywhere. Tear the instance down completely — namespace
+included, since this one exists to be thrown away — with
+`papeete-deploy undeploy product-pr123.yaml --delete-namespace`.
 
 ## Prerequisites
 
@@ -22,9 +40,12 @@ Three things have to exist before a first deploy, none of them per-actor:
    images through that builder — no Docker daemon is involved, and no node exposes a socket.
 2. **The `acr-pull` Secret in `foundry-local`.** Every actor references it as `imagePullSecrets`,
    and `task-orchestration` copies it into each ephemeral `test-<task_id>` namespace it creates.
-3. **The four token Secrets** each building actor reads (`…-github`, `…-claude` per actor, plus
-   `task-orchestration`'s own). `../GetSecrets.sh` creates all of these, including `acr-pull`,
-   and is TTY-only by design so no credential passes through an assistant's context.
+3. **The five token Secrets** each actor reads (`…-github`, `…-claude` per building actor, plus
+   `task-orchestration`'s own), and **`acr-push`**, which the two building actors mount as their
+   own `$DOCKER_CONFIG/config.json` — `buildctl` resolves registry auth client-side, so the
+   builder having a credential is not enough. `../GetSecrets.sh` creates all seven, into the
+   namespace `product.yaml` declares (or `--namespace NS` for another instance), and its collect
+   mode is TTY-only by design so no credential passes through an assistant's context.
 
 On Docker Desktop specifically, the node also needs one `hosts.toml` taking the registry out of
 its pull-through mirror's path — `examples/acr-local` writes it, and its README explains why the

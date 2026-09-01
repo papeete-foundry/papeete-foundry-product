@@ -29,13 +29,13 @@
 # WHAT IT WRITES
 #
 #   ~/.config/papeete-foundry-local/secrets.env                        0600  canonical store
-#   k8s secret bnk-rlvr-cap-sup-002-ben-implementation-github          ns foundry-local
-#   k8s secret bnk-rlvr-cap-sup-002-ben-implementation-claude          ns foundry-local
+#   k8s secret bnk-rlvr-cap-sup-002-ben-implementation-github          ns <environment.name>
+#   k8s secret bnk-rlvr-cap-sup-002-ben-implementation-claude          ns <environment.name>
 #   k8s secret bnk-rlvr-cap-sup-002-ben-testing-github                 ns foundry-local
 #   k8s secret bnk-rlvr-cap-sup-002-ben-testing-claude                 ns foundry-local
 #   k8s secret bnk-rlvr-cap-sup-002-ben-task-orchestration-github      ns foundry-local
-#   k8s secret acr-pull  (kubernetes.io/dockerconfigjson)              ns foundry-local
-#   k8s secret acr-push  (kubernetes.io/dockerconfigjson)              ns foundry-local
+#   k8s secret acr-pull  (kubernetes.io/dockerconfigjson)              ns <environment.name>
+#   k8s secret acr-push  (kubernetes.io/dockerconfigjson)              ns <environment.name>
 #
 # WHAT IT OWNS, AND WHAT IT ONLY INSTALLS
 #
@@ -62,6 +62,12 @@
 #   ./GetSecrets.sh --install    re-install the stored values as k8s Secrets, no prompting
 #   ./GetSecrets.sh --k8s        create/update the k8s Secrets only
 #   ./GetSecrets.sh --help
+#
+# Every mode takes --namespace NS (-n). Without it the namespace is read from the sibling
+# product.yaml's environment.name, so the environment is declared in exactly one place. Pass it to
+# seed an ephemeral instance of the same product:
+#
+#   ./GetSecrets.sh --k8s --namespace foundry-pr123
 
 set -euo pipefail
 set +x                      # never trace: tracing would echo secret values
@@ -72,7 +78,29 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 STORE_DIR="$HOME/.config/papeete-foundry-local"
 STORE="$STORE_DIR/secrets.env"
 
-K8S_NS="foundry-local"
+# The namespace every Secret below is written into. NOT hardcoded: this script lives beside
+# product.yaml, so the environment it serves is already declared there (environment.name) and
+# repeating it here would create a second place for the two to disagree. --namespace overrides it
+# for an ephemeral instance of the same product (a per-PR namespace), which is the whole reason
+# the product can be stood up more than once.
+PRODUCT_YAML="${PAPEETE_PRODUCT_YAML:-$SCRIPT_DIR/product.yaml}"
+
+namespace_from_product() {
+  [ -f "$PRODUCT_YAML" ] || return 1
+  python3 - "$PRODUCT_YAML" <<'PYEOF' 2>/dev/null
+import sys, yaml
+try:
+    env = (yaml.safe_load(open(sys.argv[1])) or {}).get("environment") or {}
+except Exception:
+    sys.exit(1)
+name = env.get("name")
+if not name or env.get("type") != "k8s":
+    sys.exit(1)
+print(name)
+PYEOF
+}
+
+K8S_NS=""          # resolved in main(), after any --namespace has been parsed
 
 # Each actor's deployment.yaml names these; the key inside every one of them is `token`.
 K8S_SECRET_IMPL_GITHUB="bnk-rlvr-cap-sup-002-ben-implementation-github"
@@ -640,11 +668,35 @@ mode_k8s() {
 
 usage() { sed -n '2,60p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
-case "${1:-}" in
+# --namespace may appear before or after the mode; everything else is a mode.
+mode=""
+ns_override=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --namespace|-n)
+      [ $# -ge 2 ] || die "--namespace needs a value"
+      ns_override="$2"; shift 2 ;;
+    --namespace=*)  ns_override="${1#*=}"; shift ;;
+    --status|-s|--install|--k8s|--help|-h)
+      [ -z "$mode" ] || die "give one mode at a time (got '$mode' and '$1')"
+      mode="$1"; shift ;;
+    *) die "unknown option '$1' — try --help" ;;
+  esac
+done
+
+if [ -n "$ns_override" ]; then
+  K8S_NS="$ns_override"
+elif K8S_NS="$(namespace_from_product)" && [ -n "$K8S_NS" ]; then
+  :
+else
+  die "could not read environment.name from $PRODUCT_YAML — pass --namespace NS, or set
+   PAPEETE_PRODUCT_YAML to a k8s product.yaml"
+fi
+
+case "$mode" in
   '')            mode_collect ;;
   --status|-s)   mode_status ;;
   --install)     mode_install ;;
   --k8s)         mode_k8s ;;
   --help|-h)     usage ;;
-  *)             die "unknown option '$1' — try --help" ;;
 esac
