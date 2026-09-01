@@ -23,7 +23,7 @@ Three things have to exist before a first deploy, none of them per-actor:
 2. **The `acr-pull` Secret in `foundry-local`.** Every actor references it as `imagePullSecrets`,
    and `task-orchestration` copies it into each ephemeral `test-<task_id>` namespace it creates.
 3. **The four token Secrets** each building actor reads (`…-github`, `…-claude` per actor, plus
-   `task-orchestration`'s own). `../../GetSecrets.sh` creates all of these, including `acr-pull`,
+   `task-orchestration`'s own). `../GetSecrets.sh` creates all of these, including `acr-pull`,
    and is TTY-only by design so no credential passes through an assistant's context.
 
 On Docker Desktop specifically, the node also needs one `hosts.toml` taking the registry out of
