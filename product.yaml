@@ -6,13 +6,15 @@ environment:
   k8sName: docker-desktop
   recipe: develop
 actors:
-  # BNK.RLVR.CAP.SUP.002.BEN-implementation and BNK.RLVR.CAP.SUP.002.BEN-testing are deliberately NOT
-  # listed here — Docker Desktop's Kubernetes node has no docker.sock reachable by any hostPath
-  # (verified live), so Docker-outside-of-Docker, which both actors' own image publishing
-  # depends on, can't work from inside a Pod on this cluster. They run as bare host processes
-  # instead (deploy/local/run.sh in each repo); this actor reaches them via
-  # IMPLEMENTATION_URL/TESTING_URL (deploy/k8s/base/deployment.yaml), not Service DNS.
+  - name: BNK.RLVR.CAP.SUP.002.BEN-implementation
+    label: alpha
+    version: latest
+    recipe: develop
   - name: BNK.RLVR.CAP.SUP.002.BEN-task-orchestration
+    label: alpha
+    version: latest
+    recipe: develop
+  - name: BNK.RLVR.CAP.SUP.002.BEN-testing
     label: alpha
     version: latest
     recipe: develop
