@@ -6,28 +6,43 @@
 # config change needed. Datasource uids ("loki", "tempo") come straight from observability's own
 # `grafana` ConfigMap (`datasources.yaml`) — this dashboard invents no new datasource.
 #
-# TWO KINDS OF LINE REACH LOKI FROM THESE ACTORS, and the panels below separate them by the one
-# thing that distinguishes them — whether the record carries a `task_id`:
+# WHAT EVERY LINE NOW CARRIES. Each actor installs `correlation.py` at startup: a logging filter,
+# on the HANDLERS rather than the root logger, that stamps every record this process emits with
+# `correlation_id` and `task_id` (plus `attempt`/`run_id`/`door` where they apply). "Every record"
+# includes lines from code none of these repos own — `HttpMailbox`'s own `do_POST door=… outcome=…`
+# access log most of all, which used to be identifiable only by the ABSENCE of a task id, and is
+# now filtered by the same two variables as everything else.
 #
-#   * The SESSION TRANSCRIPT. Each actor's own `engine.py` runs its `claude` session with
-#     `--output-format stream-json` and logs one projected JSON object per turn, tagged with the
-#     task it belongs to. `| json` unfolds those into fields; without it the panel shows a wall
-#     of raw JSON strings.
-#   * The FRAMEWORK'S ACCESS LOG. `HttpMailbox`'s own `do_POST door=… outcome=…` lines are plain
-#     text and carry no task, so `| json` would only tag them `__error__="JSONParserErr"`. They
-#     get their own panel rather than being parsed.
+#   * `correlation_id` IS THE TRACE ID. One `orchestrate-task` call is one trace: task-orchestration
+#     injects W3C `traceparent` on every peer call, the peer's own `HttpMailbox.do_POST` extracts
+#     it, and each actor's `correlation.correlation_id()` reads the same 32 hex digits back out.
+#     So a value in the `Run` variable below pastes straight into Tempo, and nothing about
+#     correlation ever travels in a door's payload.
+#   * `task_id` spans the retries a single correlation id also spans — and the LATER runs of the
+#     same task that it does not.
 #
-# `task_id` is STRUCTURED METADATA, not an index label (Loki promotes only its default resource
-# attributes — `service.name`, `service.instance.id`, the `k8s.*` set — when ingesting OTLP).
-# That is deliberate: a task id is unbounded, and one Loki stream per task would be exactly the
-# cardinality explosion the label index is not built for. Structured metadata still filters with
-# a plain label matcher, which is what `| task_id =~ "$task"` below does, and it needs no parser
-# in front of it — hence the filter sitting BEFORE `| json`, so a task drill-down never pays to
-# parse the turns it is about to discard.
+# FOUR KINDS OF LINE REACH LOKI, and `event` (a field the emitter writes) tells them apart:
 #
-# `$task` is a textbox, not a query variable, for the same reason: `label_values()` enumerates
-# the label index, which by design does not contain task ids. Its `.+` default means "any record
-# that has a task at all", which is precisely the session transcript and nothing else.
+#   * `event: "step"` — a named stage, logged twice (`phase: start`, then `ok`/`failed` with
+#     `duration_ms`). The "Pipeline" panel is these, in order.
+#   * `event: "event"` — a point with no duration: accepted, published, tested, retried, opened.
+#   * `event: "init" | "assistant" | "user" | "result"` — the SESSION TRANSCRIPT. Each engine runs
+#     its `claude` session with `--output-format stream-json` and logs one projected object per
+#     turn.
+#   * NO `event` AT ALL — the framework's own access log, which is plain text: `| json` would only
+#     tag it `__error__="JSONParserErr"`, so its panel uses a line filter instead.
+#
+# `task_id` and `correlation_id` are STRUCTURED METADATA, not index labels (Loki promotes only its
+# default resource attributes — `service.name`, `service.instance.id`, the `k8s.*` set — when
+# ingesting OTLP). That is deliberate: both are unbounded, and one Loki stream per task would be
+# exactly the cardinality explosion the label index is not built for. Structured metadata still
+# filters with a plain label matcher and needs no parser in front of it — hence both matchers
+# sitting BEFORE `| json` in every query below, so a drill-down never pays to parse the records it
+# is about to discard.
+#
+# Both are TEXTBOX variables, not query ones, for the same reason: `label_values()` enumerates the
+# label index, which by design contains neither. Their `.+` default means "any record carrying one
+# at all", which is every record emitted inside a request and nothing else.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -39,11 +54,17 @@ data:
     {
       "title": "BNK.RLVR.CAP.SUP.002.BEN pipeline",
       "uid": "bnk-rlvr-cap-sup-002-ben-pipeline",
-      "tags": ["bnk-rlvr-cap-sup-002-ben", "papeete-foundry"],
+      "tags": [
+        "bnk-rlvr-cap-sup-002-ben",
+        "papeete-foundry"
+      ],
       "timezone": "browser",
       "schemaVersion": 39,
-      "version": 2,
-      "time": { "from": "now-6h", "to": "now" },
+      "version": 3,
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
       "refresh": "30s",
       "templating": {
         "list": [
@@ -53,47 +74,298 @@ data:
             "label": "Actor",
             "multi": true,
             "includeAll": true,
-            "current": { "text": "All", "value": "$__all" },
+            "current": {
+              "text": "All",
+              "value": "$__all"
+            },
             "query": "BNK.RLVR.CAP.SUP.002.BEN-implementation,BNK.RLVR.CAP.SUP.002.BEN-testing,BNK.RLVR.CAP.SUP.002.BEN-task-orchestration",
             "options": [
-              { "text": "BNK.RLVR.CAP.SUP.002.BEN-implementation", "value": "BNK.RLVR.CAP.SUP.002.BEN-implementation" },
-              { "text": "BNK.RLVR.CAP.SUP.002.BEN-testing", "value": "BNK.RLVR.CAP.SUP.002.BEN-testing" },
-              { "text": "BNK.RLVR.CAP.SUP.002.BEN-task-orchestration", "value": "BNK.RLVR.CAP.SUP.002.BEN-task-orchestration" }
+              {
+                "text": "BNK.RLVR.CAP.SUP.002.BEN-implementation",
+                "value": "BNK.RLVR.CAP.SUP.002.BEN-implementation"
+              },
+              {
+                "text": "BNK.RLVR.CAP.SUP.002.BEN-testing",
+                "value": "BNK.RLVR.CAP.SUP.002.BEN-testing"
+              },
+              {
+                "text": "BNK.RLVR.CAP.SUP.002.BEN-task-orchestration",
+                "value": "BNK.RLVR.CAP.SUP.002.BEN-task-orchestration"
+              }
             ]
           },
           {
             "name": "task",
             "type": "textbox",
             "label": "Task",
-            "description": "A task id (TASK-042), or a regex over them. The default .+ matches every record that carries a task at all — i.e. the whole session transcript.",
+            "description": "A task id (TASK-042), or a regex over them. Spans every retry and all three actors. The default .+ matches every record that carries a task at all.",
             "query": ".+",
-            "current": { "text": ".+", "value": ".+" }
+            "current": {
+              "text": ".+",
+              "value": ".+"
+            }
+          },
+          {
+            "name": "correlation",
+            "type": "textbox",
+            "label": "Run (correlation id)",
+            "description": "One orchestrate-task call, across all three actors and every retry — and it IS the trace id, so the same 32 hex digits pasted into Tempo's search open the whole run as one trace. The default .+ means every run.",
+            "query": ".+",
+            "current": {
+              "text": ".+",
+              "value": ".+"
+            }
           }
         ]
       },
       "panels": [
         {
-          "id": 1,
-          "title": "Log volume by actor",
-          "type": "timeseries",
-          "datasource": { "type": "loki", "uid": "loki" },
-          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+          "id": 10,
+          "title": "Steps completed",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Every named step of the pipeline that finished — across all three actors.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 0
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
           "targets": [
             {
               "refId": "A",
-              "datasource": { "type": "loki", "uid": "loki" },
-              "expr": "sum by (service_name) (count_over_time({service_name=~\"$service\"} [$__interval]))",
-              "queryType": "range"
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(count_over_time({service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event = \"step\" | phase = \"ok\" [$__range]))",
+              "queryType": "instant"
             }
           ]
         },
         {
-          "id": 2,
-          "title": "Session transcript",
-          "description": "One line per turn of the claude session: text, tool_use, tool_result. Unbounded values (a Write body, a Read result) arrive clipped head+tail with a marker naming the true byte count — see each engine's own _clip/_project.",
+          "id": 11,
+          "title": "Steps failed",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "A step that raised. Its own record carries the exception text in `error`.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 0
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(count_over_time({service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event = \"step\" | phase = \"failed\" [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "title": "Warnings & errors",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Failed steps plus every best-effort miss (teardown, the paired PR, a log comment) that did not stop the run.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 0
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(count_over_time({service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | level =~ \"warning|error\" [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "title": "Sessions ended",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "The one `result` event each claude session ends on — implementation's and testing's alike.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 0
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(count_over_time({service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event = \"result\" [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 1,
+          "title": "Pipeline",
           "type": "logs",
-          "datasource": { "type": "loki", "uid": "loki" },
-          "gridPos": { "h": 12, "w": 24, "x": 0, "y": 8 },
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "The run, in order: every `stage()` as start/ok/failed with its duration, and every `event()` in between — accepted, published, tested, retried, opened. A `start` with no matching `ok` or `failed` is a step that was still running when the pod went away, which no duration-only record could show.",
+          "gridPos": {
+            "h": 12,
+            "w": 24,
+            "x": 0,
+            "y": 4
+          },
           "options": {
             "showTime": true,
             "wrapLogMessage": true,
@@ -105,19 +377,30 @@ data:
           "targets": [
             {
               "refId": "A",
-              "datasource": { "type": "loki", "uid": "loki" },
-              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | json",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event =~ \"step|event\"",
               "queryType": "range"
             }
           ]
         },
         {
-          "id": 5,
-          "title": "Session outcomes",
-          "description": "The one `result` event each session ends on — turns, duration, cost, and whether it errored. Expand a line for the fields.",
+          "id": 2,
+          "title": "Failures, warnings & refusals",
           "type": "logs",
-          "datasource": { "type": "loki", "uid": "loki" },
-          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Everything the run would rather you saw first. `level` is written into the record by the emitter (see correlation.py's own `_emit`) rather than read back out of whichever field the OTLP ingester mapped severity to.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 16
+          },
           "options": {
             "showTime": true,
             "wrapLogMessage": true,
@@ -129,23 +412,34 @@ data:
           "targets": [
             {
               "refId": "A",
-              "datasource": { "type": "loki", "uid": "loki" },
-              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | json | event = \"result\"",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | level =~ \"warning|error\"",
               "queryType": "range"
             }
           ]
         },
         {
-          "id": 6,
+          "id": 3,
           "title": "Door calls",
-          "description": "HttpMailbox's own access log — plain text, no task id, deliberately not parsed. `outcome` is one of accepted / refused / error.",
           "type": "logs",
-          "datasource": { "type": "loki", "uid": "loki" },
-          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "HttpMailbox's own access log — plain text, deliberately not parsed. `outcome` is one of accepted / refused / error. These lines come from code that knows nothing about this product, yet carry its ids: correlation.py stamps them at the handler, and the binding serves each request on its own thread.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 16
+          },
           "options": {
             "showTime": true,
             "wrapLogMessage": true,
-            "prettifyLogMessage": false,
+            "prettifyLogMessage": true,
             "enableLogDetails": true,
             "dedupStrategy": "none",
             "sortOrder": "Descending"
@@ -153,22 +447,134 @@ data:
           "targets": [
             {
               "refId": "A",
-              "datasource": { "type": "loki", "uid": "loki" },
-              "expr": "{service_name=~\"$service\"} | task_id = \"\"",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" |~ \"^(do_POST|deliver) door=\"",
               "queryType": "range"
             }
           ]
         },
         {
-          "id": 3,
-          "title": "Recent traces",
-          "type": "traces",
-          "datasource": { "type": "tempo", "uid": "tempo" },
-          "gridPos": { "h": 10, "w": 12, "x": 0, "y": 28 },
+          "id": 4,
+          "title": "Session transcript",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "One line per turn of the claude session: text, tool_use, tool_result. Unbounded values (a Write body, a Read result) arrive clipped head+tail with a marker naming the true byte count — see each engine's own _clip/_project.",
+          "gridPos": {
+            "h": 14,
+            "w": 16,
+            "x": 0,
+            "y": 24
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": true,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Ascending"
+          },
           "targets": [
             {
               "refId": "A",
-              "datasource": { "type": "tempo", "uid": "tempo" },
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event =~ \"init|assistant|user\"",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Session outcomes",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "The one `result` event each session ends on — turns, duration, cost, and whether it errored. Expand a line for the fields.",
+          "gridPos": {
+            "h": 14,
+            "w": 8,
+            "x": 16,
+            "y": 24
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": true,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event = \"result\"",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Log volume by actor",
+          "type": "timeseries",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Unfiltered on purpose — the one panel that still answers 'is this actor saying anything at all', which a run-scoped filter cannot.",
+          "gridPos": {
+            "h": 6,
+            "w": 24,
+            "x": 0,
+            "y": 38
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "queryType": "range",
+              "expr": "sum by (service_name) (count_over_time({service_name=~\"$service\"} [$__interval]))"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "title": "Recent traces",
+          "type": "traces",
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "description": "One trace per orchestrate-task call, spanning all three actors. Its id is this dashboard's own correlation id — copy one into the Run variable above to read the same call as logs.",
+          "gridPos": {
+            "h": 10,
+            "w": 12,
+            "x": 0,
+            "y": 44
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "tempo",
+                "uid": "tempo"
+              },
               "queryType": "traceql",
               "query": "{resource.service.name=~\"$service\"}",
               "limit": 20
@@ -176,15 +582,27 @@ data:
           ]
         },
         {
-          "id": 4,
-          "title": "Errors",
+          "id": 8,
+          "title": "Errored spans",
           "type": "traces",
-          "datasource": { "type": "tempo", "uid": "tempo" },
-          "gridPos": { "h": 10, "w": 12, "x": 12, "y": 28 },
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "description": "The same traces, narrowed to spans that ended in error.",
+          "gridPos": {
+            "h": 10,
+            "w": 12,
+            "x": 12,
+            "y": 44
+          },
           "targets": [
             {
               "refId": "A",
-              "datasource": { "type": "tempo", "uid": "tempo" },
+              "datasource": {
+                "type": "tempo",
+                "uid": "tempo"
+              },
               "queryType": "traceql",
               "query": "{resource.service.name=~\"$service\" && status=error}",
               "limit": 20
