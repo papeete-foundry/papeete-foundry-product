@@ -5,6 +5,29 @@
 # watches cluster-wide — dropping this ConfigMap into any namespace is enough, no Grafana-side
 # config change needed. Datasource uids ("loki", "tempo") come straight from observability's own
 # `grafana` ConfigMap (`datasources.yaml`) — this dashboard invents no new datasource.
+#
+# TWO KINDS OF LINE REACH LOKI FROM THESE ACTORS, and the panels below separate them by the one
+# thing that distinguishes them — whether the record carries a `task_id`:
+#
+#   * The SESSION TRANSCRIPT. Each actor's own `engine.py` runs its `claude` session with
+#     `--output-format stream-json` and logs one projected JSON object per turn, tagged with the
+#     task it belongs to. `| json` unfolds those into fields; without it the panel shows a wall
+#     of raw JSON strings.
+#   * The FRAMEWORK'S ACCESS LOG. `HttpMailbox`'s own `do_POST door=… outcome=…` lines are plain
+#     text and carry no task, so `| json` would only tag them `__error__="JSONParserErr"`. They
+#     get their own panel rather than being parsed.
+#
+# `task_id` is STRUCTURED METADATA, not an index label (Loki promotes only its default resource
+# attributes — `service.name`, `service.instance.id`, the `k8s.*` set — when ingesting OTLP).
+# That is deliberate: a task id is unbounded, and one Loki stream per task would be exactly the
+# cardinality explosion the label index is not built for. Structured metadata still filters with
+# a plain label matcher, which is what `| task_id =~ "$task"` below does, and it needs no parser
+# in front of it — hence the filter sitting BEFORE `| json`, so a task drill-down never pays to
+# parse the turns it is about to discard.
+#
+# `$task` is a textbox, not a query variable, for the same reason: `label_values()` enumerates
+# the label index, which by design does not contain task ids. Its `.+` default means "any record
+# that has a task at all", which is precisely the session transcript and nothing else.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -19,7 +42,7 @@ data:
       "tags": ["bnk-rlvr-cap-sup-002-ben", "papeete-foundry"],
       "timezone": "browser",
       "schemaVersion": 39,
-      "version": 1,
+      "version": 2,
       "time": { "from": "now-6h", "to": "now" },
       "refresh": "30s",
       "templating": {
@@ -37,6 +60,14 @@ data:
               { "text": "BNK.RLVR.CAP.SUP.002.BEN-testing", "value": "BNK.RLVR.CAP.SUP.002.BEN-testing" },
               { "text": "BNK.RLVR.CAP.SUP.002.BEN-task-orchestration", "value": "BNK.RLVR.CAP.SUP.002.BEN-task-orchestration" }
             ]
+          },
+          {
+            "name": "task",
+            "type": "textbox",
+            "label": "Task",
+            "description": "A task id (TASK-042), or a regex over them. The default .+ matches every record that carries a task at all — i.e. the whole session transcript.",
+            "query": ".+",
+            "current": { "text": ".+", "value": ".+" }
           }
         ]
       },
@@ -58,15 +89,72 @@ data:
         },
         {
           "id": 2,
-          "title": "Logs",
+          "title": "Session transcript",
+          "description": "One line per turn of the claude session: text, tool_use, tool_result. Unbounded values (a Write body, a Read result) arrive clipped head+tail with a marker naming the true byte count — see each engine's own _clip/_project.",
           "type": "logs",
           "datasource": { "type": "loki", "uid": "loki" },
-          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 8 },
+          "gridPos": { "h": 12, "w": 24, "x": 0, "y": 8 },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": true,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Ascending"
+          },
           "targets": [
             {
               "refId": "A",
               "datasource": { "type": "loki", "uid": "loki" },
-              "expr": "{service_name=~\"$service\"}",
+              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | json",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Session outcomes",
+          "description": "The one `result` event each session ends on — turns, duration, cost, and whether it errored. Expand a line for the fields.",
+          "type": "logs",
+          "datasource": { "type": "loki", "uid": "loki" },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": true,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "loki", "uid": "loki" },
+              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | json | event = \"result\"",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Door calls",
+          "description": "HttpMailbox's own access log — plain text, no task id, deliberately not parsed. `outcome` is one of accepted / refused / error.",
+          "type": "logs",
+          "datasource": { "type": "loki", "uid": "loki" },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": { "type": "loki", "uid": "loki" },
+              "expr": "{service_name=~\"$service\"} | task_id = \"\"",
               "queryType": "range"
             }
           ]
@@ -76,7 +164,7 @@ data:
           "title": "Recent traces",
           "type": "traces",
           "datasource": { "type": "tempo", "uid": "tempo" },
-          "gridPos": { "h": 10, "w": 12, "x": 0, "y": 18 },
+          "gridPos": { "h": 10, "w": 12, "x": 0, "y": 28 },
           "targets": [
             {
               "refId": "A",
@@ -92,7 +180,7 @@ data:
           "title": "Errors",
           "type": "traces",
           "datasource": { "type": "tempo", "uid": "tempo" },
-          "gridPos": { "h": 10, "w": 12, "x": 12, "y": 18 },
+          "gridPos": { "h": 10, "w": 12, "x": 12, "y": 28 },
           "targets": [
             {
               "refId": "A",
