@@ -30,7 +30,13 @@
 #     its `claude` session with `--output-format stream-json` and logs one projected object per
 #     turn.
 #   * NO `event` AT ALL — the framework's own access log, which is plain text: `| json` would only
-#     tag it `__error__="JSONParserErr"`, so its panel uses a line filter instead.
+#     tag it `__error__="JSONParserErr"`, so its panel uses a line filter instead. Since
+#     ADR-PASH-0005 (papeete-actor-synchronous-messaging-http 0.4.0) that log covers EVERY inbound
+#     call, including the ones no door answers — an undeclared door and an unparseable body used
+#     to produce no span, no metric and no line at all. Those never reach a handler, so nothing
+#     binds their ids; they carry a `correlation_id` because the binding keeps a SERVER span open
+#     across the whole call and `correlation.py`'s filter falls back to the active trace id. They
+#     carry no `task_id`, which is why the Door calls panel filters on correlation alone.
 #
 # `task_id` and `correlation_id` are STRUCTURED METADATA, not index labels (Loki promotes only its
 # default resource attributes — `service.name`, `service.instance.id`, the `k8s.*` set — when
@@ -429,7 +435,7 @@ data:
             "type": "loki",
             "uid": "loki"
           },
-          "description": "HttpMailbox's own access log — plain text, deliberately not parsed. `outcome` is one of accepted / refused / error. These lines come from code that knows nothing about this product, yet carry its ids: correlation.py stamps them at the handler, and the binding serves each request on its own thread.",
+          "description": "HttpMailbox's own access log — plain text, deliberately not parsed. `outcome` is one of accepted, refused, no-route (nothing answers that path), bad-request (the body is not JSON), or error. The last three never reach a handler, so nothing of ours binds their ids: they carry a correlation_id only because the binding holds its SERVER span open across the whole call (ADR-PASH-0005) and the filter falls back to the active trace id. Deliberately NOT filtered by $task — a call refused before a handler ran has no task id, and requiring one would hide exactly the calls this panel exists for.",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -451,7 +457,7 @@ data:
                 "type": "loki",
                 "uid": "loki"
               },
-              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" |~ \"^(do_POST|deliver) door=\"",
+              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" |~ \"^(do_POST|do_GET|deliver) \"",
               "queryType": "range"
             }
           ]

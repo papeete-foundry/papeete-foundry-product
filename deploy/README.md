@@ -106,3 +106,14 @@ passing through, and the HTTP binding serves each request on its own thread, so 
 thread scope are the same thing. That module also carries the `stage()`/`event()` vocabulary the
 "Pipeline" panel reads — which is where task-orchestration's teardown, deployment and PR
 diagnostics now go, instead of the `print()` calls that only ever reached `kubectl logs`.
+
+**Including the calls no handler ever sees.** A door an actor does not declare, a payload its
+card's `request_schema` rejects, a body that is not JSON — none of those reach a handler, so
+nothing of ours is there to bind an id. `papeete-actor-synchronous-messaging-http` **0.4.0**
+(`ADR-PASH-0005`) is what closes that: it opens its `SERVER` span before routing the path and
+before reading the body, and logs and meters one line per call from inside it, so `no-route` and
+`bad-request` — which previously produced no span, no metric and no log record whatsoever — are
+outcomes like any other. `correlation.py`'s filter then falls back to the active span's trace id,
+which is the caller's own. The Door calls panel is the one panel that filters on `$correlation`
+alone: a call refused before a handler ran has no `task_id`, and requiring one would hide exactly
+what that panel is for.
