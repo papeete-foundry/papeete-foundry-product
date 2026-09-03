@@ -82,9 +82,38 @@ per `papeete-deploy`'s own README, "Product-level resources" (`ADR-PD-0004`). `p
 applies this folder's `develop` overlay to `foundry-local` alongside every actor's own.
 
 Right now that's one thing: a Grafana dashboard ConfigMap (`grafana-dashboard-configmap.yaml`)
-covering every `BNK.RLVR.CAP.SUP.002.BEN` actor together — logs and recent traces, filtered by an
-`$service` template variable, the "template-variable drill-down between them" the ADR itself
-motivates this feature with. It carries the `grafana_dashboard: "1"` label observability's own
-Grafana sidecar already watches cluster-wide (`NAMESPACE=ALL`), so no Grafana-side config change
-is needed — dropping the ConfigMap into `foundry-local` is enough. Its two datasources (`loki`,
-`tempo`) are observability's own, not invented here.
+covering every `BNK.RLVR.CAP.SUP.002.BEN` actor together — the "template-variable drill-down
+between them" the ADR itself motivates this feature with. It carries the `grafana_dashboard: "1"`
+label observability's own Grafana sidecar already watches cluster-wide (`NAMESPACE=ALL`), so no
+Grafana-side config change is needed — dropping the ConfigMap into `foundry-local` is enough. Its
+two datasources (`loki`, `tempo`) are observability's own, not invented here.
+
+Three variables drill into it, and the second and third are what make it a *pipeline* dashboard
+rather than three log tails side by side:
+
+- **`$service`** — which actor(s).
+- **`$task`** — a `TASK-NNN`. Spans every retry attempt, and all three actors.
+- **`$correlation`** — one `orchestrate-task` call. It *is* the trace id: task-orchestration
+  already propagates W3C `traceparent` to both peers, so the same 32 hex digits identify the run
+  in Loki and open it as one trace in Tempo. Nothing about correlation travels in a door's
+  payload.
+
+Every record each actor emits carries both ids — including lines from code none of these repos
+own, `HttpMailbox`'s own `do_POST door=… outcome=…` access log most of all. Each actor installs
+`correlation.py` at startup: a `logging.Filter` on the root logger's *handlers* (not the logger,
+which never sees a named logger's records) that stamps the current thread's ids onto everything
+passing through, and the HTTP binding serves each request on its own thread, so request scope and
+thread scope are the same thing. That module also carries the `stage()`/`event()` vocabulary the
+"Pipeline" panel reads — which is where task-orchestration's teardown, deployment and PR
+diagnostics now go, instead of the `print()` calls that only ever reached `kubectl logs`.
+
+**Including the calls no handler ever sees.** A door an actor does not declare, a payload its
+card's `request_schema` rejects, a body that is not JSON — none of those reach a handler, so
+nothing of ours is there to bind an id. `papeete-actor-synchronous-messaging-http` **0.4.0**
+(`ADR-PASH-0005`) is what closes that: it opens its `SERVER` span before routing the path and
+before reading the body, and logs and meters one line per call from inside it, so `no-route` and
+`bad-request` — which previously produced no span, no metric and no log record whatsoever — are
+outcomes like any other. `correlation.py`'s filter then falls back to the active span's trace id,
+which is the caller's own. The Door calls panel is the one panel that filters on `$correlation`
+alone: a call refused before a handler ran has no `task_id`, and requiring one would hide exactly
+what that panel is for.
