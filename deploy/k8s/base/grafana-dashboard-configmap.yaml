@@ -435,7 +435,7 @@ data:
             "type": "loki",
             "uid": "loki"
           },
-          "description": "HttpMailbox's own access log — plain text, deliberately not parsed. `outcome` is one of accepted, refused, no-route (nothing answers that path), bad-request (the body is not JSON), or error. The last three never reach a handler, so nothing of ours binds their ids: they carry a correlation_id only because the binding holds its SERVER span open across the whole call (ADR-PASH-0005) and the filter falls back to the active trace id. Deliberately NOT filtered by $task — a call refused before a handler ran has no task id, and requiring one would hide exactly the calls this panel exists for.",
+          "description": "HttpMailbox's own access log — plain text, deliberately not parsed. `outcome` is one of accepted, refused, no-route (nothing answers that path), bad-request (the body is not JSON), or error. The last three never reach a handler, so nothing of ours binds their ids: they carry a correlation_id only because the binding holds its SERVER span open across the whole call (ADR-PASH-0005) and the filter falls back to the active trace id. Deliberately NOT filtered by $task — a call refused before a handler ran has no task id, and requiring one would hide exactly the calls this panel exists for. Query B is the second one for the same reason taken further: a GET to an unknown path is logged but deliberately never spanned (a readiness probe every few seconds would bury real calls in a deployment's traces), so it has no correlation id either and would drop out of a run-scoped query entirely.",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -457,7 +457,16 @@ data:
                 "type": "loki",
                 "uid": "loki"
               },
-              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" |~ \"^(do_POST|do_GET|deliver) \"",
+              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" |~ \"^(do_POST|deliver) \"",
+              "queryType": "range"
+            },
+            {
+              "refId": "B",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} |~ \"^do_GET \"",
               "queryType": "range"
             }
           ]
