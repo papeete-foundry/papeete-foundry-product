@@ -86,10 +86,26 @@ covering every `BNK.RLVR.CAP.SUP.002.BEN` actor together — the "template-varia
 between them" the ADR itself motivates this feature with. It carries the `grafana_dashboard: "1"`
 label observability's own Grafana sidecar already watches cluster-wide (`NAMESPACE=ALL`), so no
 Grafana-side config change is needed — dropping the ConfigMap into `foundry-local` is enough. Its
-two datasources (`loki`, `tempo`) are observability's own, not invented here.
+two datasources (`loki`, `tempo`) are observability's own, not invented here. (Prometheus is one
+of observability's too, and is deliberately unused: it is provisioned without a `uid`, so nothing
+portable can name it, and at this volume `count_over_time` over Loki answers the same questions.)
 
-Three variables drill into it, and the second and third are what make it a *pipeline* dashboard
-rather than three log tails side by side:
+**It holds two dashboards, because there are two questions.** The panels a run-in-progress needs
+are not the panels a week of runs needs, and one dashboard trying to be both was mostly the wrong
+half at any given moment. Each links to the other, carrying the time range and variables across.
+
+**`BNK.RLVR.CAP.SUP.002.BEN — production`** asks *is the pipeline working*. Counters over a range
+(runs started / accepted / refused, retries, failed steps, calls no door accepted), the same
+counters as rates over time, p95 per step, what the model work cost — and one panel whose whole
+job is to notice a **discrepancy**: steps that started and never ended. `stage()` logs both ends
+deliberately, which is what makes "started, never finished" expressible at all; a positive number
+there is a step whose process went away mid-flight, which no duration-only record could ever show.
+Nothing on this dashboard is scoped to a single run and none of it needs an id to be useful. Its
+last panel lists the runs, so the crossing to the other dashboard is a copied correlation id.
+
+**`BNK.RLVR.CAP.SUP.002.BEN — development`** asks *what did the pipeline do*. Five variables drive
+it, and the last four are what make it a *pipeline* dashboard rather than three log tails side by
+side:
 
 - **`$service`** — which actor(s).
 - **`$task`** — a `TASK-NNN`. Spans every retry attempt, and all three actors.
@@ -97,6 +113,38 @@ rather than three log tails side by side:
   already propagates W3C `traceparent` to both peers, so the same 32 hex digits identify the run
   in Loki and open it as one trace in Tempo. Nothing about correlation travels in a door's
   payload.
+- **`$step`** — one `stage()`/`event()` name, for the drill-down.
+- **`$grep`** — a case-insensitive regex over the *rendered* transcript lines.
+
+Its four sections answer that question at four depths. **Runs** hands you a correlation id.
+**Flow** is the run read top to bottom — `▸` a step starting, `✔`/`✘` the same step ending with
+its duration, `·` a point event — so the handoff *is* the reading order: orchestration →
+implementation → orchestration → testing → orchestration, with each peer's own steps nested in
+the window of the call that woke it. Beside it, the same run as Tempo spans. **Dive into a step**
+is the one panel deliberately left raw: at that depth the fields attached to the record — repo,
+branch, image, namespace, the exception text — are the point. And **the session, as a terminal**
+renders each `claude` session the way the CLI prints it rather than as the JSON it arrives in:
+
+```
+▶ claude claude-sonnet-5   ·   /tmp/…-TASK-CORR-001-26uh26lk
+⏺ Read(/tmp/…/backend/pyproject.toml)
+  ⎿ 1	[project]
+    2	name = "reliever-beneficiary-anchor"
+● Now let me implement the version resolution in routers.py.
+⏺ Bash(cd backend && python3 -c "…")
+  ⎿ ✘ Exit code 1
+    /bin/bash: line 1: cd: backend: No such file or directory
+■ success   ·   27 turns   ·   113.1s   ·   $0.7077   ·   3008→6335 tok
+```
+
+That is `line_format` doing the work in the query, not a change to what the actors emit. Two
+things make it honest rather than a guess. The CLI emits one message per content block, so every
+transcript record carries exactly **one** element in `blocks` — `blocks[0]` is the turn, not the
+first of several. And Loki's `| json` *skips arrays entirely*, so `blocks` is invisible to it: the
+second `| json` with explicit expressions (`b_tool="blocks[0].tool_use"`) is what reaches inside,
+and it is required rather than stylistic. A nested object addressed that way comes back as its own
+JSON string, which is what lets one label stand in as the argument of a tool whose input key the
+query did not name individually.
 
 Every record each actor emits carries both ids — including lines from code none of these repos
 own, `HttpMailbox`'s own `do_POST door=… outcome=…` access log most of all. Each actor installs
@@ -104,7 +152,7 @@ own, `HttpMailbox`'s own `do_POST door=… outcome=…` access log most of all. 
 which never sees a named logger's records) that stamps the current thread's ids onto everything
 passing through, and the HTTP binding serves each request on its own thread, so request scope and
 thread scope are the same thing. That module also carries the `stage()`/`event()` vocabulary the
-"Pipeline" panel reads — which is where task-orchestration's teardown, deployment and PR
+"Flow" panel reads — which is where task-orchestration's teardown, deployment and PR
 diagnostics now go, instead of the `print()` calls that only ever reached `kubectl logs`.
 
 **Including the calls no handler ever sees.** A door an actor does not declare, a payload its
@@ -114,6 +162,8 @@ nothing of ours is there to bind an id. `papeete-actor-synchronous-messaging-htt
 before reading the body, and logs and meters one line per call from inside it, so `no-route` and
 `bad-request` — which previously produced no span, no metric and no log record whatsoever — are
 outcomes like any other. `correlation.py`'s filter then falls back to the active span's trace id,
-which is the caller's own. The Door calls panel is the one panel that filters on `$correlation`
+which is the caller's own. The door panels are the ones that filter on `$correlation`
 alone: a call refused before a handler ran has no `task_id`, and requiring one would hide exactly
-what that panel is for.
+what those panels are for. A GET to an unknown path has neither id, because it is logged but
+deliberately never spanned — a readiness probe every few seconds would bury real calls in a
+deployment's traces — which is why those panels carry a second, unscoped query for it.

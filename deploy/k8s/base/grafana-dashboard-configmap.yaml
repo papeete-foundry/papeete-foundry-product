@@ -1,54 +1,89 @@
-# The product-level resource ADR-PD-0004's own README example names directly: "a consumer
-# product ... wants a Grafana dashboard ConfigMap describing both actors together, with a
-# template-variable drill-down between them". `grafana_dashboard: "1"` is the label
-# observability's own Grafana sidecar (grafana-sc-dashboard, METHOD=WATCH, NAMESPACE=ALL) already
-# watches cluster-wide — dropping this ConfigMap into any namespace is enough, no Grafana-side
-# config change needed. Datasource uids ("loki", "tempo") come straight from observability's own
-# `grafana` ConfigMap (`datasources.yaml`) — this dashboard invents no new datasource.
+# TWO DASHBOARDS, BECAUSE THERE ARE TWO QUESTIONS. This ConfigMap used to carry one dashboard that
+# tried to answer both at once, and the panels a run-in-progress needs are not the panels a week of
+# runs needs. So:
 #
-# WHAT EVERY LINE NOW CARRIES. Each actor installs `correlation.py` at startup: a logging filter,
-# on the HANDLERS rather than the root logger, that stamps every record this process emits with
+#   * `…-production.json` — IS THE PIPELINE WORKING. Counters over a range, rates over time, and one
+#     panel whose whole job is to notice a discrepancy: steps that started and never ended. Nothing
+#     on it is scoped to a single run, and it needs no ids to be useful — you open it, and either
+#     everything is zero where zero is right or something is not.
+#   * `…-development.json` — WHAT DID THE PIPELINE DO. One run, read end to end: which actor picked
+#     the work up and in what order, how long each step took, and — curated rather than raw — the
+#     claude session each actor ran, rendered the way the CLI renders it. It is driven by ids, and
+#     its first panel exists to hand you one.
+#
+# Each links to the other (`links`, matched on the shared `bnk-rlvr-cap-sup-002-ben` tag), carrying
+# the time range and variables across, so the crossing from "something is wrong" to "here is what
+# happened" is one click.
+#
+# The product-level resource ADR-PD-0004's own README example names this directly: "a consumer
+# product ... wants a Grafana dashboard ConfigMap describing both actors together, with a
+# template-variable drill-down between them". `grafana_dashboard: "1"` is the label observability's
+# own Grafana sidecar (grafana-sc-dashboard, METHOD=WATCH, NAMESPACE=ALL) already watches
+# cluster-wide — dropping this ConfigMap into any namespace is enough, no Grafana-side config change
+# needed. Datasource uids ("loki", "tempo") come straight from observability's own `grafana`
+# ConfigMap (`datasources.yaml`); this dashboard invents no new datasource. Prometheus is in that
+# file too and is deliberately unused here: it is provisioned WITHOUT a `uid`, so nothing portable
+# can name it, and at this volume `count_over_time` over Loki answers the same questions.
+#
+# WHAT EVERY LINE CARRIES. Each actor installs `correlation.py` at startup: a logging filter, on the
+# HANDLERS rather than the root logger, that stamps every record this process emits with
 # `correlation_id` and `task_id` (plus `attempt`/`run_id`/`door` where they apply). "Every record"
 # includes lines from code none of these repos own — `HttpMailbox`'s own `do_POST door=… outcome=…`
-# access log most of all, which used to be identifiable only by the ABSENCE of a task id, and is
-# now filtered by the same two variables as everything else.
+# access log most of all, which used to be identifiable only by the ABSENCE of a task id.
 #
 #   * `correlation_id` IS THE TRACE ID. One `orchestrate-task` call is one trace: task-orchestration
-#     injects W3C `traceparent` on every peer call, the peer's own `HttpMailbox.do_POST` extracts
-#     it, and each actor's `correlation.correlation_id()` reads the same 32 hex digits back out.
-#     So a value in the `Run` variable below pastes straight into Tempo, and nothing about
-#     correlation ever travels in a door's payload.
-#   * `task_id` spans the retries a single correlation id also spans — and the LATER runs of the
-#     same task that it does not.
+#     injects W3C `traceparent` on every peer call, the peer's own `HttpMailbox.do_POST` extracts it,
+#     and each actor's `correlation.correlation_id()` reads the same 32 hex digits back out. So a
+#     value in the development dashboard's `Run` variable pastes straight into Tempo, and nothing
+#     about correlation ever travels in a door's payload.
+#   * `task_id` spans the retries a single correlation id also spans — and the LATER runs of the same
+#     task that it does not.
 #
 # FOUR KINDS OF LINE REACH LOKI, and `event` (a field the emitter writes) tells them apart:
 #
 #   * `event: "step"` — a named stage, logged twice (`phase: start`, then `ok`/`failed` with
-#     `duration_ms`). The "Pipeline" panel is these, in order.
+#     `duration_ms`). Both ends are logged deliberately: it is the only way "started and never
+#     finished" is expressible at all, which is what the production dashboard's discrepancy panel
+#     counts.
 #   * `event: "event"` — a point with no duration: accepted, published, tested, retried, opened.
-#   * `event: "init" | "assistant" | "user" | "result"` — the SESSION TRANSCRIPT. Each engine runs
-#     its `claude` session with `--output-format stream-json` and logs one projected object per
-#     turn.
-#   * NO `event` AT ALL — the framework's own access log, which is plain text: `| json` would only
-#     tag it `__error__="JSONParserErr"`, so its panel uses a line filter instead. Since
-#     ADR-PASH-0005 (papeete-actor-synchronous-messaging-http 0.4.0) that log covers EVERY inbound
-#     call, including the ones no door answers — an undeclared door and an unparseable body used
-#     to produce no span, no metric and no line at all. Those never reach a handler, so nothing
-#     binds their ids; they carry a `correlation_id` because the binding keeps a SERVER span open
-#     across the whole call and `correlation.py`'s filter falls back to the active trace id. They
-#     carry no `task_id`, which is why the Door calls panel filters on correlation alone.
+#   * `event: "init" | "assistant" | "user" | "result"` — the SESSION TRANSCRIPT. Each engine runs its
+#     `claude` session with `--output-format stream-json` and logs one projected object per turn.
+#   * NO `event` AT ALL — the framework's own access log, which is plain text: `| json` would only tag
+#     it `__error__="JSONParserErr"`, so its panels use a line filter instead. Since ADR-PASH-0005
+#     (papeete-actor-synchronous-messaging-http 0.4.0) that log covers EVERY inbound call, including
+#     the ones no door answers — an undeclared door and an unparseable body used to produce no span,
+#     no metric and no line at all. Those never reach a handler, so nothing binds their ids; they
+#     carry a `correlation_id` because the binding keeps a SERVER span open across the whole call and
+#     `correlation.py`'s filter falls back to the active trace id. They carry no `task_id`, which is
+#     why every door panel filters on correlation alone. A GET to an unknown path has neither, because
+#     it is logged but deliberately never spanned (a readiness probe every few seconds would bury real
+#     calls in a deployment's traces) — hence the second query on those panels.
+#
+# WHY THE TRANSCRIPT IS RENDERED, NOT DUMPED. A `logs` panel shows the log line, and the log line is
+# JSON, so the session used to read as a wall of objects. `line_format` fixes that in the query rather
+# than in the emitter: the panel projects each turn back into the shape the CLI itself prints — `⏺
+# Bash(…)`, `⎿` for what came back, `●` for prose, `■` for the final result and its cost. Two things
+# make that honest rather than a guess. First, the CLI emits one message per content block, so every
+# transcript record carries exactly ONE element in `blocks` — `blocks[0]` is the turn, not the first
+# of several. Second, Loki's `| json` SKIPS arrays entirely, so `blocks` is invisible to it; the
+# second `| json` with explicit expressions (`b_tool="blocks[0].tool_use"`) is what reaches inside,
+# and it is required, not stylistic. A nested object addressed that way comes back as its own JSON
+# string, which is what lets `b_args` stand in as the argument for a tool whose input key we did not
+# name individually.
 #
 # `task_id` and `correlation_id` are STRUCTURED METADATA, not index labels (Loki promotes only its
 # default resource attributes — `service.name`, `service.instance.id`, the `k8s.*` set — when
 # ingesting OTLP). That is deliberate: both are unbounded, and one Loki stream per task would be
 # exactly the cardinality explosion the label index is not built for. Structured metadata still
-# filters with a plain label matcher and needs no parser in front of it — hence both matchers
-# sitting BEFORE `| json` in every query below, so a drill-down never pays to parse the records it
-# is about to discard.
+# filters with a plain label matcher and needs no parser in front of it — hence both matchers sitting
+# BEFORE `| json` in every query below, so a drill-down never pays to parse the records it is about
+# to discard. `severity_text` is structured metadata for the same reason and is what the trouble
+# panels filter on: it is the OTLP severity itself, so it catches a warning from code none of these
+# repos own, which a `| json | level=…` on our own emitted field never could.
 #
-# Both are TEXTBOX variables, not query ones, for the same reason: `label_values()` enumerates the
-# label index, which by design contains neither. Their `.+` default means "any record carrying one
-# at all", which is every record emitted inside a request and nothing else.
+# Both id variables are TEXTBOX, not query, for the same reason: `label_values()` enumerates the label
+# index, which by design contains neither. Their `.+` default means "any record carrying one at all",
+# which is every record emitted inside a request and nothing else.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -56,22 +91,1036 @@ metadata:
   labels:
     grafana_dashboard: "1"
 data:
-  bnk-rlvr-cap-sup-002-ben-pipeline.json: |
+  bnk-rlvr-cap-sup-002-ben-production.json: |
     {
-      "title": "BNK.RLVR.CAP.SUP.002.BEN pipeline",
-      "uid": "bnk-rlvr-cap-sup-002-ben-pipeline",
+      "title": "BNK.RLVR.CAP.SUP.002.BEN — production",
+      "uid": "bnk-rlvr-cap-sup-002-ben-production",
       "tags": [
         "bnk-rlvr-cap-sup-002-ben",
-        "papeete-foundry"
+        "papeete-foundry",
+        "production"
       ],
       "timezone": "browser",
       "schemaVersion": 39,
-      "version": 3,
+      "version": 1,
+      "time": {
+        "from": "now-24h",
+        "to": "now"
+      },
+      "refresh": "1m",
+      "links": [
+        {
+          "title": "Development view",
+          "type": "dashboards",
+          "tags": [
+            "bnk-rlvr-cap-sup-002-ben"
+          ],
+          "asDropdown": false,
+          "icon": "external link",
+          "includeVars": true,
+          "keepTime": true,
+          "targetBlank": false,
+          "tooltip": "",
+          "url": ""
+        }
+      ],
+      "templating": {
+        "list": [
+          {
+            "name": "service",
+            "type": "custom",
+            "label": "Actor",
+            "multi": true,
+            "includeAll": true,
+            "current": {
+              "text": "All",
+              "value": "$__all"
+            },
+            "query": "BNK.RLVR.CAP.SUP.002.BEN-implementation,BNK.RLVR.CAP.SUP.002.BEN-testing,BNK.RLVR.CAP.SUP.002.BEN-task-orchestration",
+            "options": [
+              {
+                "text": "BNK.RLVR.CAP.SUP.002.BEN-implementation",
+                "value": "BNK.RLVR.CAP.SUP.002.BEN-implementation"
+              },
+              {
+                "text": "BNK.RLVR.CAP.SUP.002.BEN-testing",
+                "value": "BNK.RLVR.CAP.SUP.002.BEN-testing"
+              },
+              {
+                "text": "BNK.RLVR.CAP.SUP.002.BEN-task-orchestration",
+                "value": "BNK.RLVR.CAP.SUP.002.BEN-task-orchestration"
+              }
+            ]
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 10,
+          "title": "Runs started",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "One `orchestrate-task` call accepted at the door. Always read off task-orchestration, whatever the Actor variable says — a run is that actor's own unit of work, and scoping this to a peer would count nothing.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 0,
+            "y": 0
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(count_over_time({service_name=~\".+-task-orchestration\"} | json | step=\"orchestration-started\" [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 11,
+          "title": "Runs accepted",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Reached a verdict its criteria passed, and opened the PRs.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 4,
+            "y": 0
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(count_over_time({service_name=~\".+-task-orchestration\"} | json | step=\"orchestration-accepted\" [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 12,
+          "title": "Runs refused",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "task-orchestration turned the call away, or gave up. `because` carries the reason — see the Warnings & errors panel below.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 8,
+            "y": 0
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(count_over_time({service_name=~\".+-task-orchestration\"} | json | step=\"orchestration-refused\" [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 13,
+          "title": "Retries",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "An attempt whose tests did not pass, sent back round the implement → test loop. Not an error — but a rising count is the pipeline working harder for the same output.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 12,
+            "y": 0
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(count_over_time({service_name=~\".+-task-orchestration\"} | json | step=\"retrying\" [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 14,
+          "title": "Steps failed",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "A `stage()` that raised. Its own record carries the exception text in `error`.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 16,
+            "y": 0
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(count_over_time({service_name=~\"$service\"} | json | event=\"step\" | phase=\"failed\" [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 15,
+          "title": "Calls not accepted",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Every inbound call whose outcome was not `accepted` — refused, no-route, bad-request. Read straight off the framework's own access log, so it counts the calls no handler of ours ever saw.",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 20,
+            "y": 0
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  },
+                  {
+                    "color": "orange",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(count_over_time({service_name=~\"$service\"} |~ \"^do_(POST|GET) \" != \"outcome=accepted\" [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "title": "Sessions ended",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "One `result` event per claude session — three actors' worth, whichever the Actor variable selects.",
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 0,
+            "y": 4
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(count_over_time({service_name=~\"$service\"} | json | event=\"result\" [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 21,
+          "title": "Session cost",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "What the model work in the selected range actually cost, summed off each session's own `result` event.",
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 6,
+            "y": 4
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "currencyUSD",
+              "decimals": 2,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(sum_over_time({service_name=~\"$service\"} | json | event=\"result\" | unwrap cost_usd [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 22,
+          "title": "Input tokens",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Summed off each session's `result` event.",
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 12,
+            "y": 4
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(sum_over_time({service_name=~\"$service\"} | json | event=\"result\" | unwrap input_tokens [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 23,
+          "title": "Output tokens",
+          "type": "stat",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Summed off each session's `result` event.",
+          "gridPos": {
+            "h": 5,
+            "w": 6,
+            "x": 18,
+            "y": 4
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "colorMode": "value",
+            "graphMode": "none",
+            "textMode": "auto",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum(sum_over_time({service_name=~\"$service\"} | json | event=\"result\" | unwrap output_tokens [$__range]))",
+              "queryType": "instant"
+            }
+          ]
+        },
+        {
+          "id": 30,
+          "title": "Run outcomes over time",
+          "type": "timeseries",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Accepted, refused and retried, as they happened. Same three counters as the top row, but where a rate change is visible rather than averaged into one number.",
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 9
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "bars",
+                "fillOpacity": 60,
+                "lineWidth": 1,
+                "stacking": {
+                  "mode": "normal"
+                }
+              },
+              "unit": "short",
+              "decimals": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum by (step) (count_over_time({service_name=~\".+-task-orchestration\"} | json | step=~\"orchestration-accepted|orchestration-refused|retrying\" [$__interval]))",
+              "queryType": "range",
+              "legendFormat": "{{step}}"
+            }
+          ]
+        },
+        {
+          "id": 31,
+          "title": "Door calls by outcome",
+          "type": "timeseries",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Every inbound call the HTTP binding logged, split by outcome: `accepted`, `refused` (a handler said no), `no-route` (nothing answers that path), `bad-request` (the body is not JSON). The last two never reach a handler at all — since ADR-PASH-0005 they are still logged, which is what makes them countable here.",
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 9
+          },
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "bars",
+                "fillOpacity": 60,
+                "lineWidth": 1,
+                "stacking": {
+                  "mode": "normal"
+                }
+              },
+              "unit": "short",
+              "decimals": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "sum by (outcome) (count_over_time({service_name=~\"$service\"} |~ \"^do_(POST|GET) \" | regexp \"outcome=(?P<outcome>\\\\S+)\" [$__interval]))",
+              "queryType": "range",
+              "legendFormat": "{{outcome}}"
+            }
+          ]
+        },
+        {
+          "id": 40,
+          "title": "Discrepancy — steps that started and never ended",
+          "type": "table",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Starts minus completions, per actor and step. `stage()` logs both ends, so a positive number here is a step whose process went away mid-flight — an OOM kill, an evicted pod, a container restart — which no duration-only record could ever show. Zero rows is the healthy state.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 16
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "custom": {
+                "align": "auto",
+                "filterable": true
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "showHeader": true,
+            "footer": {
+              "show": false
+            },
+            "sortBy": [
+              {
+                "displayName": "Unfinished",
+                "desc": true
+              }
+            ]
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "(sum by (service_name, step) (count_over_time({service_name=~\"$service\"} | json | event=\"step\" | phase=\"start\" [$__range])) - (sum by (service_name, step) (count_over_time({service_name=~\"$service\"} | json | event=\"step\" | phase=~\"ok|failed\" [$__range])) or sum by (service_name, step) (count_over_time({service_name=~\"$service\"} | json | event=\"step\" | phase=\"start\" [$__range])) * 0)) > 0",
+              "queryType": "instant",
+              "instant": true,
+              "format": "table"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true
+                },
+                "renameByName": {
+                  "service_name": "Actor",
+                  "step": "Step",
+                  "Value": "Unfinished"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 41,
+          "title": "Slowest steps (p95)",
+          "type": "table",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "The 95th percentile of every step that completed, over the selected range. The place to notice a step drifting before anyone reports it as slow.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 16
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "decimals": 0,
+              "custom": {
+                "align": "auto",
+                "filterable": true
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "showHeader": true,
+            "footer": {
+              "show": false
+            },
+            "sortBy": [
+              {
+                "displayName": "p95",
+                "desc": true
+              }
+            ]
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "quantile_over_time(0.95, {service_name=~\"$service\"} | json | event=\"step\" | phase=\"ok\" | unwrap duration_ms [$__range]) by (step)",
+              "queryType": "instant",
+              "instant": true,
+              "format": "table"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true
+                },
+                "renameByName": {
+                  "step": "Step",
+                  "Value": "p95"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 50,
+          "title": "Warnings, errors & refusals",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Everything the pipeline would rather you saw first — filtered on `severity_text`, the OTLP severity itself, so it catches records from code none of these repos own as well as the ones `correlation.py` emits. The line is curated down to actor / step / reason; expand a row for the whole record.",
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 24
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} | severity_text =~ \"WARN|ERROR|FATAL\" | json | line_format `{{ printf \"%-19s\" (trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name) }}  {{ if .step }}{{ .step }}{{ with (or .error .because) }}   {{ . }}{{ end }}{{ else }}{{ __line__ }}{{ end }}`",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 51,
+          "title": "Calls no door answered",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "The access log, minus everything that was accepted. Two queries because a GET to an unknown path is logged but deliberately never spanned — a readiness probe every few seconds would bury real calls in a deployment's traces — so it carries no correlation id and nothing run-scoped would ever show it.",
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 24
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} |~ \"^do_POST \" != \"outcome=accepted\" | line_format `{{ printf \"%-19s\" (trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name) }}  {{ __line__ }}`",
+              "queryType": "range"
+            },
+            {
+              "refId": "B",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} |~ \"^do_GET \" != \"outcome=accepted\" | line_format `{{ printf \"%-19s\" (trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name) }}  {{ __line__ }}`",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 60,
+          "title": "Runs, newest first",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "One line per run, carrying the correlation id that identifies it everywhere else. Copy one into the development dashboard's Run variable (link at the top right) to read that run end to end; paste the same 32 digits into Tempo to open it as one trace.",
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 33
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\".+-task-orchestration\"} | json | step =~ \"orchestration-(started|accepted|refused)\" | line_format `{{ .correlation_id }}   {{ printf \"%-16s\" .task_id }}   {{ if eq .step \"orchestration-started\" }}▸ started    {{ .title }}   ·   run {{ .run_id }}   ·   {{ .criteria }} criteria{{ else if eq .step \"orchestration-accepted\" }}✔ accepted   {{ .verdict }}   ·   {{ .attempts }} attempt(s)   ·   {{ .pr_url }}{{ else }}✘ refused    {{ .because }}{{ end }}`",
+              "queryType": "range"
+            }
+          ]
+        }
+      ]
+    }
+  bnk-rlvr-cap-sup-002-ben-development.json: |
+    {
+      "title": "BNK.RLVR.CAP.SUP.002.BEN — development",
+      "uid": "bnk-rlvr-cap-sup-002-ben-development",
+      "tags": [
+        "bnk-rlvr-cap-sup-002-ben",
+        "papeete-foundry",
+        "development"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
       "time": {
         "from": "now-6h",
         "to": "now"
       },
-      "refresh": "30s",
+      "refresh": "",
+      "links": [
+        {
+          "title": "Production view",
+          "type": "dashboards",
+          "tags": [
+            "bnk-rlvr-cap-sup-002-ben"
+          ],
+          "asDropdown": false,
+          "icon": "external link",
+          "includeVars": true,
+          "keepTime": true,
+          "targetBlank": false,
+          "tooltip": "",
+          "url": ""
+        }
+      ],
       "templating": {
         "list": [
           {
@@ -115,267 +1164,118 @@ data:
             "name": "correlation",
             "type": "textbox",
             "label": "Run (correlation id)",
-            "description": "One orchestrate-task call, across all three actors and every retry — and it IS the trace id, so the same 32 hex digits pasted into Tempo's search open the whole run as one trace. The default .+ means every run.",
+            "description": "One orchestrate-task call, across all three actors and every retry — and it IS the trace id, so the same 32 hex digits pasted into Tempo open the whole run as one trace. Copy one out of the Runs panel. The default .+ means every run.",
             "query": ".+",
             "current": {
               "text": ".+",
               "value": ".+"
+            }
+          },
+          {
+            "name": "step",
+            "type": "textbox",
+            "label": "Step",
+            "description": "One step name (claude-session, deploy-component, run-test-job, …), or a regex over them. Narrows the Flow panel and drives the step drill-down. The default .+ is every step.",
+            "query": ".+",
+            "current": {
+              "text": ".+",
+              "value": ".+"
+            }
+          },
+          {
+            "name": "grep",
+            "type": "textbox",
+            "label": "Find (in transcript)",
+            "description": "A case-insensitive regex applied to the RENDERED transcript lines — so it searches what you can see, not the JSON underneath. Empty matches everything.",
+            "query": "",
+            "current": {
+              "text": "",
+              "value": ""
             }
           }
         ]
       },
       "panels": [
         {
-          "id": 10,
-          "title": "Steps completed",
-          "type": "stat",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "description": "Every named step of the pipeline that finished — across all three actors.",
+          "id": 100,
+          "title": "Pick a run",
+          "type": "row",
+          "collapsed": false,
+          "panels": [],
           "gridPos": {
-            "h": 4,
-            "w": 6,
+            "h": 1,
+            "w": 24,
             "x": 0,
             "y": 0
-          },
-          "options": {
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "colorMode": "value",
-            "graphMode": "none",
-            "textMode": "auto",
-            "justifyMode": "auto"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "short",
-              "decimals": 0,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "text",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "loki",
-                "uid": "loki"
-              },
-              "expr": "sum(count_over_time({service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event = \"step\" | phase = \"ok\" [$__range]))",
-              "queryType": "instant"
-            }
-          ]
+          }
         },
         {
-          "id": 11,
-          "title": "Steps failed",
-          "type": "stat",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "description": "A step that raised. Its own record carries the exception text in `error`.",
-          "gridPos": {
-            "h": 4,
-            "w": 6,
-            "x": 6,
-            "y": 0
-          },
-          "options": {
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "colorMode": "value",
-            "graphMode": "none",
-            "textMode": "auto",
-            "justifyMode": "auto"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "short",
-              "decimals": 0,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "text",
-                    "value": null
-                  },
-                  {
-                    "color": "red",
-                    "value": 1
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "loki",
-                "uid": "loki"
-              },
-              "expr": "sum(count_over_time({service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event = \"step\" | phase = \"failed\" [$__range]))",
-              "queryType": "instant"
-            }
-          ]
-        },
-        {
-          "id": 12,
-          "title": "Warnings & errors",
-          "type": "stat",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "description": "Failed steps plus every best-effort miss (teardown, the paired PR, a log comment) that did not stop the run.",
-          "gridPos": {
-            "h": 4,
-            "w": 6,
-            "x": 12,
-            "y": 0
-          },
-          "options": {
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "colorMode": "value",
-            "graphMode": "none",
-            "textMode": "auto",
-            "justifyMode": "auto"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "short",
-              "decimals": 0,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "text",
-                    "value": null
-                  },
-                  {
-                    "color": "red",
-                    "value": 1
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "loki",
-                "uid": "loki"
-              },
-              "expr": "sum(count_over_time({service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | level =~ \"warning|error\" [$__range]))",
-              "queryType": "instant"
-            }
-          ]
-        },
-        {
-          "id": 13,
-          "title": "Sessions ended",
-          "type": "stat",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "description": "The one `result` event each claude session ends on — implementation's and testing's alike.",
-          "gridPos": {
-            "h": 4,
-            "w": 6,
-            "x": 18,
-            "y": 0
-          },
-          "options": {
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": "",
-              "values": false
-            },
-            "colorMode": "value",
-            "graphMode": "none",
-            "textMode": "auto",
-            "justifyMode": "auto"
-          },
-          "fieldConfig": {
-            "defaults": {
-              "unit": "short",
-              "decimals": 0,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "text",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "loki",
-                "uid": "loki"
-              },
-              "expr": "sum(count_over_time({service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event = \"result\" [$__range]))",
-              "queryType": "instant"
-            }
-          ]
-        },
-        {
-          "id": 1,
-          "title": "Pipeline",
+          "id": 101,
+          "title": "Runs — copy a correlation id into the Run variable",
           "type": "logs",
           "datasource": {
             "type": "loki",
             "uid": "loki"
           },
-          "description": "The run, in order: every `stage()` as start/ok/failed with its duration, and every `event()` in between — accepted, published, tested, retried, opened. A `start` with no matching `ok` or `failed` is a step that was still running when the pod went away, which no duration-only record could show.",
+          "description": "Every run task-orchestration has started, accepted or refused. The first column is the correlation id: paste it into `Run` above and every panel below narrows to that one run, across all three actors and every retry. Deliberately not filtered by Run itself — this is how you find one.",
           "gridPos": {
-            "h": 12,
+            "h": 8,
             "w": 24,
             "x": 0,
-            "y": 4
+            "y": 1
           },
           "options": {
             "showTime": true,
             "wrapLogMessage": true,
-            "prettifyLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\".+-task-orchestration\"} | json | step =~ \"orchestration-(started|accepted|refused)\" | line_format `{{ .correlation_id }}   {{ printf \"%-16s\" .task_id }}   {{ if eq .step \"orchestration-started\" }}▸ started    {{ .title }}   ·   run {{ .run_id }}   ·   {{ .criteria }} criteria{{ else if eq .step \"orchestration-accepted\" }}✔ accepted   {{ .verdict }}   ·   {{ .attempts }} attempt(s)   ·   {{ .pr_url }}{{ else }}✘ refused    {{ .because }}{{ end }}`",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 110,
+          "title": "The flow — which actor did what, in order",
+          "type": "row",
+          "collapsed": false,
+          "panels": [],
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 9
+          }
+        },
+        {
+          "id": 111,
+          "title": "Flow",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "The run read end to end, in the order it happened: task-orchestration opens a step, the peer it called logs its own steps inside that window, control comes back, the next peer starts. Reading top to bottom IS the handoff — orchestration → implementation → orchestration → testing → orchestration. `▸` is a step starting, `✔`/`✘` the same step ending with its duration, `·` a point event with no duration. Narrow to one step with the Step variable.",
+          "gridPos": {
+            "h": 15,
+            "w": 14,
+            "x": 0,
+            "y": 10
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
             "enableLogDetails": true,
             "dedupStrategy": "none",
             "sortOrder": "Ascending"
@@ -387,201 +1287,25 @@ data:
                 "type": "loki",
                 "uid": "loki"
               },
-              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event =~ \"step|event\"",
+              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event =~ \"step|event\" | step =~ \"$step\" | line_format `{{ printf \"%-19s\" (trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name) }}{{ if eq .event \"step\" }}{{ if eq .phase \"start\" }}  ▸ {{ .step }}{{ else if eq .phase \"ok\" }}  ✔ {{ printf \"%6.1fs\" (divf (.duration_ms | float64) 1000) }}  {{ .step }}{{ else }}  ✘ {{ printf \"%6.1fs\" (divf (.duration_ms | float64) 1000) }}  {{ .step }}   {{ .error }}{{ end }}{{ else }}  ·           {{ .step }}{{ if .total }}   {{ .passed }}/{{ .total }} passed{{ end }}{{ if .attempts }}   {{ .attempts }} attempt(s){{ end }}{{ with (or .verdict .because .title .url .image .branch .component .next_attempt) }}   {{ . }}{{ end }}{{ end }}`",
               "queryType": "range"
             }
           ]
         },
         {
-          "id": 2,
-          "title": "Failures, warnings & refusals",
-          "type": "logs",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "description": "Everything the run would rather you saw first. `level` is written into the record by the emitter (see correlation.py's own `_emit`) rather than read back out of whichever field the OTLP ingester mapped severity to.",
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 16
-          },
-          "options": {
-            "showTime": true,
-            "wrapLogMessage": true,
-            "prettifyLogMessage": true,
-            "enableLogDetails": true,
-            "dedupStrategy": "none",
-            "sortOrder": "Descending"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "loki",
-                "uid": "loki"
-              },
-              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | level =~ \"warning|error\"",
-              "queryType": "range"
-            }
-          ]
-        },
-        {
-          "id": 3,
-          "title": "Door calls",
-          "type": "logs",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "description": "HttpMailbox's own access log — plain text, deliberately not parsed. `outcome` is one of accepted, refused, no-route (nothing answers that path), bad-request (the body is not JSON), or error. The last three never reach a handler, so nothing of ours binds their ids: they carry a correlation_id only because the binding holds its SERVER span open across the whole call (ADR-PASH-0005) and the filter falls back to the active trace id. Deliberately NOT filtered by $task — a call refused before a handler ran has no task id, and requiring one would hide exactly the calls this panel exists for. Query B is the second one for the same reason taken further: a GET to an unknown path is logged but deliberately never spanned (a readiness probe every few seconds would bury real calls in a deployment's traces), so it has no correlation id either and would drop out of a run-scoped query entirely.",
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 16
-          },
-          "options": {
-            "showTime": true,
-            "wrapLogMessage": true,
-            "prettifyLogMessage": true,
-            "enableLogDetails": true,
-            "dedupStrategy": "none",
-            "sortOrder": "Descending"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "loki",
-                "uid": "loki"
-              },
-              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" |~ \"^(do_POST|deliver) \"",
-              "queryType": "range"
-            },
-            {
-              "refId": "B",
-              "datasource": {
-                "type": "loki",
-                "uid": "loki"
-              },
-              "expr": "{service_name=~\"$service\"} |~ \"^do_GET \"",
-              "queryType": "range"
-            }
-          ]
-        },
-        {
-          "id": 4,
-          "title": "Session transcript",
-          "type": "logs",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "description": "One line per turn of the claude session: text, tool_use, tool_result. Unbounded values (a Write body, a Read result) arrive clipped head+tail with a marker naming the true byte count — see each engine's own _clip/_project.",
-          "gridPos": {
-            "h": 14,
-            "w": 16,
-            "x": 0,
-            "y": 24
-          },
-          "options": {
-            "showTime": true,
-            "wrapLogMessage": true,
-            "prettifyLogMessage": true,
-            "enableLogDetails": true,
-            "dedupStrategy": "none",
-            "sortOrder": "Ascending"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "loki",
-                "uid": "loki"
-              },
-              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event =~ \"init|assistant|user\"",
-              "queryType": "range"
-            }
-          ]
-        },
-        {
-          "id": 5,
-          "title": "Session outcomes",
-          "type": "logs",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "description": "The one `result` event each session ends on — turns, duration, cost, and whether it errored. Expand a line for the fields.",
-          "gridPos": {
-            "h": 14,
-            "w": 8,
-            "x": 16,
-            "y": 24
-          },
-          "options": {
-            "showTime": true,
-            "wrapLogMessage": true,
-            "prettifyLogMessage": true,
-            "enableLogDetails": true,
-            "dedupStrategy": "none",
-            "sortOrder": "Descending"
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "loki",
-                "uid": "loki"
-              },
-              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event = \"result\"",
-              "queryType": "range"
-            }
-          ]
-        },
-        {
-          "id": 6,
-          "title": "Log volume by actor",
-          "type": "timeseries",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "description": "Unfiltered on purpose — the one panel that still answers 'is this actor saying anything at all', which a run-scoped filter cannot.",
-          "gridPos": {
-            "h": 6,
-            "w": 24,
-            "x": 0,
-            "y": 38
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "loki",
-                "uid": "loki"
-              },
-              "queryType": "range",
-              "expr": "sum by (service_name) (count_over_time({service_name=~\"$service\"} [$__interval]))"
-            }
-          ]
-        },
-        {
-          "id": 7,
-          "title": "Recent traces",
+          "id": 112,
+          "title": "Traces — open one for the cross-actor waterfall",
           "type": "traces",
           "datasource": {
             "type": "tempo",
             "uid": "tempo"
           },
-          "description": "One trace per orchestrate-task call, spanning all three actors. Its id is this dashboard's own correlation id — copy one into the Run variable above to read the same call as logs.",
+          "description": "The same run as spans rather than lines. A trace id here IS this dashboard's correlation id, so the two views name the same thing — click a trace for the waterfall, or copy its id into Run to read it as the curated flow beside it.",
           "gridPos": {
-            "h": 10,
-            "w": 12,
-            "x": 0,
-            "y": 44
+            "h": 15,
+            "w": 10,
+            "x": 14,
+            "y": 10
           },
           "targets": [
             {
@@ -597,30 +1321,292 @@ data:
           ]
         },
         {
-          "id": 8,
-          "title": "Errored spans",
-          "type": "traces",
+          "id": 113,
+          "title": "Steps in this run, longest first",
+          "type": "table",
           "datasource": {
-            "type": "tempo",
-            "uid": "tempo"
+            "type": "loki",
+            "uid": "loki"
           },
-          "description": "The same traces, narrowed to spans that ended in error.",
+          "description": "Every step that completed inside the selected run, with what it cost in wall clock. The place to decide which step is worth diving into.",
           "gridPos": {
-            "h": 10,
-            "w": 12,
-            "x": 12,
-            "y": 44
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 25
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "decimals": 0,
+              "custom": {
+                "align": "auto",
+                "filterable": true
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "showHeader": true,
+            "footer": {
+              "show": false
+            },
+            "sortBy": [
+              {
+                "displayName": "Duration",
+                "desc": true
+              }
+            ]
           },
           "targets": [
             {
               "refId": "A",
               "datasource": {
-                "type": "tempo",
-                "uid": "tempo"
+                "type": "loki",
+                "uid": "loki"
               },
-              "queryType": "traceql",
-              "query": "{resource.service.name=~\"$service\" && status=error}",
-              "limit": 20
+              "expr": "max by (service_name, step) (max_over_time({service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event=\"step\" | phase=\"ok\" | unwrap duration_ms [$__range]))",
+              "queryType": "instant",
+              "instant": true,
+              "format": "table"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true
+                },
+                "renameByName": {
+                  "service_name": "Actor",
+                  "step": "Step",
+                  "Value": "Duration"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": 120,
+          "title": "Dive into a step",
+          "type": "row",
+          "collapsed": false,
+          "panels": [],
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 33
+          }
+        },
+        {
+          "id": 121,
+          "title": "Every record the selected step emitted — raw",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Set `Step` above to one step name (`claude-session`, `deploy-component`, `run-test-job`, …) and this is every record that carries it, uncurated: the whole JSON body with every field the emitter attached — repo, branch, image, namespace, component, the exception text. This is the one panel that is deliberately NOT prettified into a sentence, because at this depth the fields are the point. Grafana's row expander lists them individually.",
+          "gridPos": {
+            "h": 12,
+            "w": 24,
+            "x": 0,
+            "y": 34
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Ascending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | step =~ \"$step\"",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 130,
+          "title": "The session, as a terminal",
+          "type": "row",
+          "collapsed": false,
+          "panels": [],
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 46
+          }
+        },
+        {
+          "id": 131,
+          "title": "Session transcript",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "The claude session the actor ran, rendered the way the CLI renders it rather than as the JSON it arrives in: `▶` the session opening, `✻` a thinking turn, `●` prose, `⏺` a tool call with its principal argument, `⎿` what that tool returned (`✘` if it errored), `■` the final result with turns, wall clock, cost and tokens. Every turn carries exactly one content block, which is what lets one line stand for one turn. Narrow to a single actor with the Actor variable — otherwise two sessions interleave. `Find` greps the rendered lines, case-insensitively.",
+          "gridPos": {
+            "h": 24,
+            "w": 24,
+            "x": 0,
+            "y": 47
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Ascending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | json b_text=\"blocks[0].text\", b_think=\"blocks[0].thinking\", b_tool=\"blocks[0].tool_use\", b_args=\"blocks[0].input\", b_cmd=\"blocks[0].input.command\", b_file=\"blocks[0].input.file_path\", b_path=\"blocks[0].input.path\", b_pattern=\"blocks[0].input.pattern\", b_url=\"blocks[0].input.url\", b_prompt=\"blocks[0].input.prompt\", b_desc=\"blocks[0].input.description\", b_res=\"blocks[0].tool_result\", b_out=\"blocks[0].content\", b_err=\"blocks[0].is_error\" | event =~ \"init|assistant|user|result\" | line_format `{{ if eq .event \"init\" }}▶ claude {{ .model }}   ·   {{ .cwd }}{{ else if eq .event \"result\" }}■ {{ .subtype }}   ·   {{ .num_turns }} turns   ·   {{ printf \"%.1fs\" (divf (.duration_ms | float64) 1000) }}   ·   {{ printf \"$%.4f\" (.cost_usd | float64) }}   ·   {{ .input_tokens }}→{{ .output_tokens }} tok\n{{ .result }}{{ else if .b_tool }}⏺ {{ .b_tool }}({{ or .b_cmd .b_file .b_path .b_pattern .b_url .b_prompt .b_desc .b_args }}){{ else if .b_res }}  ⎿ {{ if eq .b_err \"true\" }}✘ {{ end }}{{ .b_out }}{{ else if .b_text }}● {{ .b_text }}{{ else if .b_think }}✻ thinking… {{ .b_think }}{{ else if eq .event \"assistant\" }}✻ thinking…{{ else }}{{ __line__ }}{{ end }}` |~ \"(?i)$grep\"",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 132,
+          "title": "Session outcomes",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "The `result` turn on its own — how each session ended, what it cost, and the summary it wrote on the way out.",
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 71
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | json | event = \"result\" | line_format `{{ printf \"%-19s\" (trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name) }}  {{ if eq .is_error \"true\" }}✘{{ else }}✔{{ end }} {{ .subtype }}   ·   {{ .num_turns }} turns   ·   {{ printf \"%.1fs\" (divf (.duration_ms | float64) 1000) }}   ·   {{ printf \"$%.4f\" (.cost_usd | float64) }}   ·   {{ .input_tokens }}→{{ .output_tokens }} tok\n{{ .result }}`",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 140,
+          "title": "Doors and trouble",
+          "type": "row",
+          "collapsed": false,
+          "panels": [],
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 80
+          }
+        },
+        {
+          "id": 141,
+          "title": "Door calls",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Every inbound call in this run, as the HTTP binding logged it. Filtered on correlation alone: a call refused before a handler ran has no task id, and requiring one would hide exactly what this panel is for. Query B is the GET log, which carries no correlation id either — an unknown GET path is logged but never spanned.",
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 81
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" |~ \"^do_POST \" | line_format `{{ printf \"%-19s\" (trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name) }}  {{ __line__ }}`",
+              "queryType": "range"
+            },
+            {
+              "refId": "B",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} |~ \"^do_GET \" | line_format `{{ printf \"%-19s\" (trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name) }}  {{ __line__ }}`",
+              "queryType": "range"
+            }
+          ]
+        },
+        {
+          "id": 142,
+          "title": "Warnings & errors in this run",
+          "type": "logs",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "Filtered on OTLP severity, so it catches records from code none of these repos own as well as the ones `correlation.py` emits.",
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 81
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "expr": "{service_name=~\"$service\"} | task_id =~ \"$task\" | correlation_id =~ \"$correlation\" | severity_text =~ \"WARN|ERROR|FATAL\" | json | line_format `{{ printf \"%-19s\" (trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name) }}  {{ if .step }}{{ .step }}{{ with (or .error .because) }}   {{ . }}{{ end }}{{ else }}{{ __line__ }}{{ end }}`",
+              "queryType": "range"
             }
           ]
         }

@@ -1,6 +1,7 @@
-# papeete-foundry-product's own product-level resource (papeete-deploy's ADR-PD-0004): a Grafana
-# dashboard ConfigMap covering every BNK.RLVR.CAP.SUP.002.BEN actor together, picked up by
-# observability's own Grafana sidecar via the grafana_dashboard=1 label — see
+# papeete-foundry-product's own product-level resource (papeete-deploy's ADR-PD-0004): one
+# ConfigMap carrying two Grafana dashboards over every BNK.RLVR.CAP.SUP.002.BEN actor together —
+# a production one (is the pipeline working) and a development one (what did it do) — picked up by
+# observability's own Grafana sidecar via the grafana_dashboard=1 label. See
 # grafana-dashboard-configmap.yaml for why no Grafana-side config change is needed.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
