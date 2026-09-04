@@ -1303,7 +1303,7 @@ data:
             "type": "loki",
             "uid": "loki"
           },
-          "description": "The run as a topology rather than a list. A NODE is an inbound call an actor received, read off HttpMailbox's own access log — which since ADR-PASH-0005 covers every call, so an actor that REFUSED one is a node too, ringed red with the refusal as its subtitle. An EDGE is the matching outbound call, taken from the caller's own `call-*` step, and its stat is that step's real duration — nothing here is inferred topology. Click a node to focus the whole dashboard on that actor. Pick a single correlation id first: with the default `.+` this draws every run at once, and an actor called more than once collapses onto one node.",
+          "description": "The run as a topology rather than a list. A NODE is an inbound call an actor received, read off HttpMailbox's own access log — so an actor that REFUSED a call is a node too, ringed red with the refusal as its subtitle. An EDGE is the matching outbound call, taken from the caller's own `call-*` step, and its stat is that step's real duration; nothing here is inferred topology. This panel deliberately IGNORES the Actor variable and always draws the whole run — filtering it by actor would strip out the very task-orchestration records the edges are made of. Click a node to narrow everything BELOW to that actor. Pick one correlation id first: at `.+` this draws every run at once, and an actor called more than once collapses onto a single node. A correlation with no outbound call at all — a bare refused probe — has nodes but no edges, which this panel cannot draw; the door panels at the bottom are where those live.",
           "gridPos": {
             "h": 11,
             "w": 10,
@@ -1347,7 +1347,7 @@ data:
                 "uid": "loki"
               },
               "queryType": "range",
-              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" |= \"do_POST\" | logfmt | label_format id=`{{ .service_name }}`, title=`{{ trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name }}`, subtitle=`{{ .outcome }}`, detail__door=`{{ .door }}`, detail__task=`{{ .task_id }}`, detail__caller=`{{ .caller }}`, arc__accepted=`{{ if eq .outcome \"accepted\" }}1{{ else }}0{{ end }}`, arc__refused=`{{ if eq .outcome \"accepted\" }}0{{ else }}1{{ end }}`",
+              "expr": "{service_name=~\"BNK.RLVR.CAP.SUP.002.BEN-.*\"} | correlation_id =~ \"$correlation\" |= \"do_POST\" | logfmt | label_format id=`{{ .service_name }}`, title=`{{ trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name }}`, subtitle=`{{ .outcome }}`, detail__door=`{{ .door }}`, detail__task=`{{ .task_id }}`, detail__caller=`{{ .caller }}`, arc__accepted=`{{ if eq .outcome \"accepted\" }}1{{ else }}0{{ end }}`, arc__refused=`{{ if eq .outcome \"accepted\" }}0{{ else }}1{{ end }}`",
               "maxLines": 200
             },
             {
@@ -1357,7 +1357,7 @@ data:
                 "uid": "loki"
               },
               "queryType": "range",
-              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" | json | event = \"step\" | phase != \"start\" | url != \"\" | label_format id=`{{ .service_name }} -> {{ .url }}`, source=`{{ .service_name }}`, target=`{{ regexReplaceAll \"-.*$\" .service_name \"\" }}-{{ regexReplaceAll \"^.*-\" .url \"\" }}`, mainstat=`{{ .duration_ms }}`, secondarystat=`{{ .step }}`",
+              "expr": "{service_name=~\"BNK.RLVR.CAP.SUP.002.BEN-.*\"} | correlation_id =~ \"$correlation\" | json | event = \"step\" | phase != \"start\" | url != \"\" | label_format id=`{{ .service_name }} -> {{ .url }}`, source=`{{ .service_name }}`, target=`{{ regexReplaceAll \"-.*$\" .service_name \"\" }}-{{ regexReplaceAll \"^.*-\" .url \"\" }}`, mainstat=`{{ .duration_ms }}`, secondarystat=`{{ .step }}`",
               "maxLines": 200
             }
           ],
@@ -1400,7 +1400,7 @@ data:
             "type": "loki",
             "uid": "loki"
           },
-          "description": "The same run on a clock: one lane per actor, filled where that actor was emitting. The handoff IS the picture — implementation runs, hands back, testing runs, and task-orchestration is the sparse lane that wakes between them and keeps going after both are done (deploy, test job, teardown, PR). Colour is how much it said in that bucket, which is why a claude-session reads as a solid block. Click a lane to focus the dashboard on that actor. Wall-clock is the axis, so this panel is only legible once the dashboard's time range is near the run's own length: pick a run above, then zoom the range onto it.",
+          "description": "The same run on a clock: one lane per actor, filled where that actor was emitting. The handoff IS the picture — implementation runs, hands back, testing runs, and task-orchestration is the sparse lane that wakes between them and keeps going after both are done (deploy, test job, teardown, PR). Like the map beside it, this ignores the Actor variable and always shows the whole run. Wall-clock is the axis, so it is legible when the time range is near the run's own length: pick a run above, then zoom onto it.",
           "gridPos": {
             "h": 11,
             "w": 14,
@@ -1426,7 +1426,7 @@ data:
           "fieldConfig": {
             "defaults": {
               "color": {
-                "mode": "continuous-BlYlRd"
+                "mode": "palette-classic"
               },
               "custom": {
                 "fillOpacity": 85,
@@ -1457,11 +1457,12 @@ data:
                 "uid": "loki"
               },
               "queryType": "range",
-              "expr": "sum by (service_name, actor) (count_over_time({service_name=~\"$service\"} | correlation_id =~ \"$correlation\" | label_format actor=`{{ trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name }}` [$__interval])) > 0",
+              "expr": "sum by (service_name, actor) (count_over_time({service_name=~\"BNK.RLVR.CAP.SUP.002.BEN-.*\"} | correlation_id =~ \"$correlation\" | label_format actor=`{{ trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name }}` [$__interval])) > 0",
               "legendFormat": "{{actor}}"
             }
           ],
-          "maxDataPoints": 1200
+          "maxDataPoints": 400,
+          "interval": "15s"
         },
         {
           "id": 110,

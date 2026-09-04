@@ -123,7 +123,10 @@ side:
 Its five sections answer that question at five depths. **Runs** hands you a correlation id. **The
 run as a shape** is the top of the descent: a *call map* — each actor a node, each `call-*` step an
 edge labelled with its real duration — beside *actor lanes*, the same run on a clock with one
-filled lane per actor. Click a node or a lane and the whole dashboard focuses on that actor.
+filled lane per actor. Both deliberately ignore `$service` and always draw the whole run: the
+edges are made of task-orchestration's own records, so filtering the section by actor would strip
+out the very lines the picture is drawn from. Clicking a node or a lane narrows everything
+*below* instead.
 **Flow** is the run read top to bottom — `▸` a step starting, `✔`/`✘` the same step ending with
 its duration, `·` a point event — so the handoff *is* the reading order: orchestration →
 implementation → orchestration → testing → orchestration, with each peer's own steps nested in
