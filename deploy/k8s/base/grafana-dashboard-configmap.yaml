@@ -20,10 +20,15 @@
 # template-variable drill-down between them". `grafana_dashboard: "1"` is the label observability's
 # own Grafana sidecar (grafana-sc-dashboard, METHOD=WATCH, NAMESPACE=ALL) already watches
 # cluster-wide — dropping this ConfigMap into any namespace is enough, no Grafana-side config change
-# needed. Datasource uids ("loki", "tempo") come straight from observability's own `grafana`
-# ConfigMap (`datasources.yaml`); this dashboard invents no new datasource. Prometheus is in that
-# file too and is deliberately unused here: it is provisioned WITHOUT a `uid`, so nothing portable
-# can name it, and at this volume `count_over_time` over Loki answers the same questions.
+# needed. The one datasource uid this file names ("loki") comes straight from observability's own
+# `grafana` ConfigMap (`datasources.yaml`); this dashboard invents no new datasource. The other two
+# in that file are deliberately unused. Prometheus is provisioned WITHOUT a `uid`, so nothing
+# portable can name it, and at this volume `count_over_time` over Loki answers the same questions.
+# Tempo would be the natural home for a cross-actor waterfall, but it holds NO SPANS AT ALL today,
+# and its entry points at port 3100 while the `tempo` Service exposes only 3200 — so a traces panel
+# here could render nothing whatever its query. Both of those are observability's own config, not
+# ours, which is why the development dashboard draws the run's shape from Loki instead; when they
+# are fixed, the `Run` variable already carries exactly the id a trace lookup wants.
 #
 # WHAT EVERY LINE CARRIES. Each actor installs `correlation.py` at startup: a logging filter, on the
 # HANDLERS rather than the root logger, that stamps every record this process emits with
@@ -34,8 +39,9 @@
 #   * `correlation_id` IS THE TRACE ID. One `orchestrate-task` call is one trace: task-orchestration
 #     injects W3C `traceparent` on every peer call, the peer's own `HttpMailbox.do_POST` extracts it,
 #     and each actor's `correlation.correlation_id()` reads the same 32 hex digits back out. So a
-#     value in the development dashboard's `Run` variable pastes straight into Tempo, and nothing
-#     about correlation ever travels in a door's payload.
+#     value in the development dashboard's `Run` variable IS the id a Tempo lookup would want (see
+#     above for why that lookup cannot answer yet), and nothing about correlation ever travels in a
+#     door's payload.
 #   * `task_id` spans the retries a single correlation id also spans — and the LATER runs of the same
 #     task that it does not.
 #
@@ -58,6 +64,28 @@
 #     why every door panel filters on correlation alone. A GET to an unknown path has neither, because
 #     it is logged but deliberately never spanned (a readiness probe every few seconds would bury real
 #     calls in a deployment's traces) — hence the second query on those panels.
+#
+# THE RUN AS A SHAPE, AND WHY IT IS BUILT FROM LOGS QUERIES. The development dashboard's first depth
+# after picking a run is a node graph beside a state timeline: who took part, who called whom, and
+# when each actor was working. Neither invents topology. A NODE is one INBOUND call, read off the
+# access log — which is why an actor that REFUSED a call is a node like any other, ringed red with
+# the refusal as its subtitle. An EDGE is the caller's own `call-*` step, whose `url` field names the
+# callee, and whose stat is that step's real `duration_ms`. `label_format` rebuilds the callee's
+# exact `service_name` out of that url —
+# `{{ regexReplaceAll "-.*$" .service_name "" }}-{{ regexReplaceAll "^.*-" .url "" }}` — so node and
+# edge join on a value neither side hardcodes.
+#
+# Both are LOGS queries carrying `refId: nodes` / `refId: edges`, not the metric queries the numbers
+# would suggest, and that is forced rather than stylistic. Grafana admits a frame to a node graph by
+# its refId, but its consumers then read `nodes[0]` and `edges[0]` — the FIRST frame of each kind and
+# no other. A Loki metric query returns ONE FRAME PER SERIES, so `sum by (service_name)` would offer
+# three separate node frames and exactly one node would be drawn. A logs query returns a single frame
+# with one row per line, which is the shape the panel needs; `extractFields` over the `labels` field
+# then lifts the `label_format` output into real columns, and `organize` renames them to the names
+# the panel reads (`id`, `title`, `subtitle`, `mainstat`, `arc__*`, `detail__*`). The consequence
+# worth knowing: the map is a ONE-RUN view. With `Run` left at `.+` it draws every run at once, and
+# an actor called more than once collapses onto a single node, because a node is keyed by the actor
+# rather than by the call.
 #
 # WHY THE TRANSCRIPT IS RENDERED, NOT DUMPED. A `logs` panel shows the log line, and the log line is
 # JSON, so the session used to read as a wall of objects. `line_format` fixes that in the query rather
@@ -1245,6 +1273,204 @@ data:
           ]
         },
         {
+          "id": 105,
+          "title": "The run as a shape — who took part, and when",
+          "type": "row",
+          "collapsed": false,
+          "panels": [],
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 9
+          }
+        },
+        {
+          "id": 106,
+          "title": "Call map — who was involved, and who called whom",
+          "type": "nodegraph",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "The run as a topology rather than a list. A NODE is an inbound call an actor received, read off HttpMailbox's own access log — which since ADR-PASH-0005 covers every call, so an actor that REFUSED one is a node too, ringed red with the refusal as its subtitle. An EDGE is the matching outbound call, taken from the caller's own `call-*` step, and its stat is that step's real duration — nothing here is inferred topology. Click a node to focus the whole dashboard on that actor. Pick a single correlation id first: with the default `.+` this draws every run at once, and an actor called more than once collapses onto one node.",
+          "gridPos": {
+            "h": 11,
+            "w": 10,
+            "x": 0,
+            "y": 10
+          },
+          "options": {
+            "nodes": {
+              "arcs": [
+                {
+                  "field": "arc__accepted",
+                  "color": "green"
+                },
+                {
+                  "field": "arc__refused",
+                  "color": "red"
+                }
+              ]
+            },
+            "edges": {
+              "mainStatUnit": "ms"
+            },
+            "zoomMode": "cooperative"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "links": [
+                {
+                  "title": "Focus this dashboard on this actor",
+                  "url": "/d/bnk-rlvr-cap-sup-002-ben-development?var-service=${__data.fields.id}&var-task=${task}&var-correlation=${correlation}&var-step=${step}&var-grep=${grep}&${__url_time_range}"
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "nodes",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "queryType": "range",
+              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" |= \"do_POST\" | logfmt | label_format nodeId=`{{ .service_name }}`, title=`{{ trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name }}`, subtitle=`{{ .outcome }}`, detail__door=`{{ .door }}`, detail__task=`{{ .task_id }}`, detail__caller=`{{ .caller }}`, arc__accepted=`{{ if eq .outcome \"accepted\" }}1{{ else }}0{{ end }}`, arc__refused=`{{ if eq .outcome \"accepted\" }}0{{ else }}1{{ end }}`",
+              "maxLines": 200
+            },
+            {
+              "refId": "edges",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "queryType": "range",
+              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" | json | event = \"step\" | phase != \"start\" | url != \"\" | label_format edgeId=`{{ .service_name }} -> {{ .url }}`, source=`{{ .service_name }}`, target=`{{ regexReplaceAll \"-.*$\" .service_name \"\" }}-{{ regexReplaceAll \"^.*-\" .url \"\" }}`, secondarystat=`{{ .step }}`",
+              "maxLines": 200
+            }
+          ],
+          "transformations": [
+            {
+              "id": "extractFields",
+              "options": {
+                "source": "labels",
+                "format": "json",
+                "replace": false,
+                "keepTime": false
+              }
+            },
+            {
+              "id": "convertFieldType",
+              "options": {
+                "conversions": [
+                  {
+                    "targetField": "duration_ms",
+                    "destinationType": "number"
+                  },
+                  {
+                    "targetField": "arc__accepted",
+                    "destinationType": "number"
+                  },
+                  {
+                    "targetField": "arc__refused",
+                    "destinationType": "number"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "organize",
+              "options": {
+                "renameByName": {
+                  "id": "_rowid",
+                  "nodeId": "id",
+                  "edgeId": "id",
+                  "duration_ms": "mainstat"
+                },
+                "excludeByName": {
+                  "labels": true,
+                  "labelTypes": true,
+                  "Line": true,
+                  "tsNs": true
+                },
+                "indexByName": {}
+              }
+            }
+          ]
+        },
+        {
+          "id": 107,
+          "title": "Actor lanes — when each actor was working",
+          "type": "state-timeline",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "description": "The same run on a clock: one lane per actor, filled where that actor was emitting. The handoff IS the picture — implementation runs, hands back, testing runs, and task-orchestration is the sparse lane that wakes between them and keeps going after both are done (deploy, test job, teardown, PR). Colour is how much it said in that bucket, which is why a claude-session reads as a solid block. Click a lane to focus the dashboard on that actor.",
+          "gridPos": {
+            "h": 11,
+            "w": 14,
+            "x": 10,
+            "y": 10
+          },
+          "options": {
+            "mergeValues": true,
+            "showValue": "never",
+            "alignValue": "center",
+            "rowHeight": 0.9,
+            "perPage": 20,
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": false
+            },
+            "tooltip": {
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "continuous-BlYlRd"
+              },
+              "custom": {
+                "fillOpacity": 85,
+                "lineWidth": 0,
+                "spanNulls": false,
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false
+              },
+              "unit": "short",
+              "links": [
+                {
+                  "title": "Focus this dashboard on this actor",
+                  "url": "/d/bnk-rlvr-cap-sup-002-ben-development?var-service=${__field.labels.service_name}&var-task=${task}&var-correlation=${correlation}&var-step=${step}&var-grep=${grep}&${__url_time_range}"
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "queryType": "range",
+              "expr": "sum by (service_name, actor) (count_over_time({service_name=~\"$service\"} | correlation_id =~ \"$correlation\" | label_format actor=`{{ trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name }}` [$__interval])) > 0",
+              "legendFormat": "{{actor}}"
+            }
+          ]
+        },
+        {
           "id": 110,
           "title": "The flow — which actor did what, in order",
           "type": "row",
@@ -1254,7 +1480,7 @@ data:
             "h": 1,
             "w": 24,
             "x": 0,
-            "y": 9
+            "y": 21
           }
         },
         {
@@ -1268,9 +1494,9 @@ data:
           "description": "The run read end to end, in the order it happened: task-orchestration opens a step, the peer it called logs its own steps inside that window, control comes back, the next peer starts. Reading top to bottom IS the handoff — orchestration → implementation → orchestration → testing → orchestration. `▸` is a step starting, `✔`/`✘` the same step ending with its duration, `·` a point event with no duration. Narrow to one step with the Step variable.",
           "gridPos": {
             "h": 15,
-            "w": 14,
+            "w": 24,
             "x": 0,
-            "y": 10
+            "y": 22
           },
           "options": {
             "showTime": true,
@@ -1293,34 +1519,6 @@ data:
           ]
         },
         {
-          "id": 112,
-          "title": "Traces — open one for the cross-actor waterfall",
-          "type": "traces",
-          "datasource": {
-            "type": "tempo",
-            "uid": "tempo"
-          },
-          "description": "The same run as spans rather than lines. A trace id here IS this dashboard's correlation id, so the two views name the same thing — click a trace for the waterfall, or copy its id into Run to read it as the curated flow beside it.",
-          "gridPos": {
-            "h": 15,
-            "w": 10,
-            "x": 14,
-            "y": 10
-          },
-          "targets": [
-            {
-              "refId": "A",
-              "datasource": {
-                "type": "tempo",
-                "uid": "tempo"
-              },
-              "queryType": "traceql",
-              "query": "{resource.service.name=~\"$service\"}",
-              "limit": 20
-            }
-          ]
-        },
-        {
           "id": 113,
           "title": "Steps in this run, longest first",
           "type": "table",
@@ -1333,7 +1531,7 @@ data:
             "h": 8,
             "w": 24,
             "x": 0,
-            "y": 25
+            "y": 37
           },
           "fieldConfig": {
             "defaults": {
@@ -1397,7 +1595,7 @@ data:
             "h": 1,
             "w": 24,
             "x": 0,
-            "y": 33
+            "y": 45
           }
         },
         {
@@ -1413,7 +1611,7 @@ data:
             "h": 12,
             "w": 24,
             "x": 0,
-            "y": 34
+            "y": 46
           },
           "options": {
             "showTime": true,
@@ -1445,7 +1643,7 @@ data:
             "h": 1,
             "w": 24,
             "x": 0,
-            "y": 46
+            "y": 58
           }
         },
         {
@@ -1461,7 +1659,7 @@ data:
             "h": 24,
             "w": 24,
             "x": 0,
-            "y": 47
+            "y": 59
           },
           "options": {
             "showTime": true,
@@ -1496,7 +1694,7 @@ data:
             "h": 9,
             "w": 24,
             "x": 0,
-            "y": 71
+            "y": 83
           },
           "options": {
             "showTime": true,
@@ -1528,7 +1726,7 @@ data:
             "h": 1,
             "w": 24,
             "x": 0,
-            "y": 80
+            "y": 92
           }
         },
         {
@@ -1544,7 +1742,7 @@ data:
             "h": 9,
             "w": 12,
             "x": 0,
-            "y": 81
+            "y": 93
           },
           "options": {
             "showTime": true,
@@ -1588,7 +1786,7 @@ data:
             "h": 9,
             "w": 12,
             "x": 12,
-            "y": 81
+            "y": 93
           },
           "options": {
             "showTime": true,

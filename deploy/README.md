@@ -86,9 +86,13 @@ covering every `BNK.RLVR.CAP.SUP.002.BEN` actor together — the "template-varia
 between them" the ADR itself motivates this feature with. It carries the `grafana_dashboard: "1"`
 label observability's own Grafana sidecar already watches cluster-wide (`NAMESPACE=ALL`), so no
 Grafana-side config change is needed — dropping the ConfigMap into `foundry-local` is enough. Its
-two datasources (`loki`, `tempo`) are observability's own, not invented here. (Prometheus is one
-of observability's too, and is deliberately unused: it is provisioned without a `uid`, so nothing
-portable can name it, and at this volume `count_over_time` over Loki answers the same questions.)
+one datasource (`loki`) is observability's own, not invented here. The other two in that file are
+deliberately unused. Prometheus is provisioned without a `uid`, so nothing portable can name it,
+and at this volume `count_over_time` over Loki answers the same questions. Tempo would be the
+natural home for a cross-actor waterfall, but it currently holds no spans at all, and its
+datasource entry points at port 3100 while the `tempo` Service exposes only 3200 — so a traces
+panel could render nothing whatever its query. Both are observability's own config, not ours,
+which is why the run's shape is drawn from Loki here instead.
 
 **It holds two dashboards, because there are two questions.** The panels a run-in-progress needs
 are not the panels a week of runs needs, and one dashboard trying to be both was mostly the wrong
@@ -111,16 +115,19 @@ side:
 - **`$task`** — a `TASK-NNN`. Spans every retry attempt, and all three actors.
 - **`$correlation`** — one `orchestrate-task` call. It *is* the trace id: task-orchestration
   already propagates W3C `traceparent` to both peers, so the same 32 hex digits identify the run
-  in Loki and open it as one trace in Tempo. Nothing about correlation travels in a door's
-  payload.
+  in Loki and would open it as one trace the day Tempo has spans to open. Nothing about
+  correlation travels in a door's payload.
 - **`$step`** — one `stage()`/`event()` name, for the drill-down.
 - **`$grep`** — a case-insensitive regex over the *rendered* transcript lines.
 
-Its four sections answer that question at four depths. **Runs** hands you a correlation id.
+Its five sections answer that question at five depths. **Runs** hands you a correlation id. **The
+run as a shape** is the top of the descent: a *call map* — each actor a node, each `call-*` step an
+edge labelled with its real duration — beside *actor lanes*, the same run on a clock with one
+filled lane per actor. Click a node or a lane and the whole dashboard focuses on that actor.
 **Flow** is the run read top to bottom — `▸` a step starting, `✔`/`✘` the same step ending with
 its duration, `·` a point event — so the handoff *is* the reading order: orchestration →
 implementation → orchestration → testing → orchestration, with each peer's own steps nested in
-the window of the call that woke it. Beside it, the same run as Tempo spans. **Dive into a step**
+the window of the call that woke it. **Dive into a step**
 is the one panel deliberately left raw: at that depth the fields attached to the record — repo,
 branch, image, namespace, the exception text — are the point. And **the session, as a terminal**
 renders each `claude` session the way the CLI prints it rather than as the JSON it arrives in:
@@ -145,6 +152,18 @@ second `| json` with explicit expressions (`b_tool="blocks[0].tool_use"`) is wha
 and it is required rather than stylistic. A nested object addressed that way comes back as its own
 JSON string, which is what lets one label stand in as the argument of a tool whose input key the
 query did not name individually.
+
+**The call map invents no topology, and is built from logs queries on purpose.** A node is one
+*inbound* call, read off `HttpMailbox`'s access log — which is why an actor that *refused* a call
+is a node like any other, ringed red with the refusal as its subtitle. An edge is the caller's own
+`call-*` step, whose `url` field names the callee; `label_format` rebuilds the callee's exact
+`service_name` out of that url, so node and edge join on a value neither side hardcodes. Both are
+*logs* queries rather than the metric queries the numbers suggest, and that is forced: Grafana
+reads only `nodes[0]` and `edges[0]` — the first frame of each kind — while a Loki metric query
+returns one frame *per series*, so `sum by (service_name)` would offer three node frames and draw
+exactly one node. A logs query returns a single frame with one row per line, which is the shape
+the panel needs. The consequence worth knowing: the map is a **one-run** view. Left at `.+` it
+draws every run at once, and an actor called more than once collapses onto one node.
 
 Every record each actor emits carries both ids — including lines from code none of these repos
 own, `HttpMailbox`'s own `do_POST door=… outcome=…` access log most of all. Each actor installs
