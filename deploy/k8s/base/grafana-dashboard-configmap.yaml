@@ -1129,7 +1129,7 @@ data:
       "schemaVersion": 39,
       "version": 1,
       "time": {
-        "from": "now-6h",
+        "from": "now-7d",
         "to": "now"
       },
       "refresh": "",
