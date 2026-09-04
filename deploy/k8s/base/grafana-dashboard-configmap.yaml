@@ -1245,7 +1245,7 @@ data:
             "type": "loki",
             "uid": "loki"
           },
-          "description": "Every run task-orchestration has started, accepted or refused. The first column is the correlation id: paste it into `Run` above and every panel below narrows to that one run, across all three actors and every retry. Deliberately not filtered by Run itself — this is how you find one.",
+          "description": "Every run task-orchestration has started, accepted or refused. The first column is the correlation id: paste it into `Run` above and every panel below narrows to that one run, across all three actors and every retry. Deliberately not filtered by Run itself — this is how you find one. This panel always looks back 7 days regardless of the dashboard's own range, so it keeps listing runs after you have zoomed the range down onto one of them — which is what the lanes panel needs to be readable.",
           "gridPos": {
             "h": 8,
             "w": 24,
@@ -1270,7 +1270,8 @@ data:
               "expr": "{service_name=~\".+-task-orchestration\"} | json | step =~ \"orchestration-(started|accepted|refused)\" | line_format `{{ .correlation_id }}   {{ printf \"%-16s\" .task_id }}   {{ if eq .step \"orchestration-started\" }}▸ started    {{ .title }}   ·   run {{ .run_id }}   ·   {{ .criteria }} criteria{{ else if eq .step \"orchestration-accepted\" }}✔ accepted   {{ .verdict }}   ·   {{ .attempts }} attempt(s)   ·   {{ .pr_url }}{{ else }}✘ refused    {{ .because }}{{ end }}`",
               "queryType": "range"
             }
-          ]
+          ],
+          "timeFrom": "7d"
         },
         {
           "id": 105,
@@ -1337,7 +1338,7 @@ data:
                 "uid": "loki"
               },
               "queryType": "range",
-              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" |= \"do_POST\" | logfmt | label_format nodeId=`{{ .service_name }}`, title=`{{ trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name }}`, subtitle=`{{ .outcome }}`, detail__door=`{{ .door }}`, detail__task=`{{ .task_id }}`, detail__caller=`{{ .caller }}`, arc__accepted=`{{ if eq .outcome \"accepted\" }}1{{ else }}0{{ end }}`, arc__refused=`{{ if eq .outcome \"accepted\" }}0{{ else }}1{{ end }}`",
+              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" |= \"do_POST\" | logfmt | label_format id=`{{ .service_name }}`, title=`{{ trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name }}`, subtitle=`{{ .outcome }}`, detail__door=`{{ .door }}`, detail__task=`{{ .task_id }}`, detail__caller=`{{ .caller }}`, arc__accepted=`{{ if eq .outcome \"accepted\" }}1{{ else }}0{{ end }}`, arc__refused=`{{ if eq .outcome \"accepted\" }}0{{ else }}1{{ end }}`",
               "maxLines": 200
             },
             {
@@ -1347,7 +1348,7 @@ data:
                 "uid": "loki"
               },
               "queryType": "range",
-              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" | json | event = \"step\" | phase != \"start\" | url != \"\" | label_format edgeId=`{{ .service_name }} -> {{ .url }}`, source=`{{ .service_name }}`, target=`{{ regexReplaceAll \"-.*$\" .service_name \"\" }}-{{ regexReplaceAll \"^.*-\" .url \"\" }}`, secondarystat=`{{ .step }}`",
+              "expr": "{service_name=~\"$service\"} | correlation_id =~ \"$correlation\" | json | event = \"step\" | phase != \"start\" | url != \"\" | label_format id=`{{ .service_name }} -> {{ .url }}`, source=`{{ .service_name }}`, target=`{{ regexReplaceAll \"-.*$\" .service_name \"\" }}-{{ regexReplaceAll \"^.*-\" .url \"\" }}`, mainstat=`{{ .duration_ms }}`, secondarystat=`{{ .step }}`",
               "maxLines": 200
             }
           ],
@@ -1357,7 +1358,7 @@ data:
               "options": {
                 "source": "labels",
                 "format": "json",
-                "replace": false,
+                "replace": true,
                 "keepTime": false
               }
             },
@@ -1366,7 +1367,7 @@ data:
               "options": {
                 "conversions": [
                   {
-                    "targetField": "duration_ms",
+                    "targetField": "mainstat",
                     "destinationType": "number"
                   },
                   {
@@ -1379,24 +1380,6 @@ data:
                   }
                 ]
               }
-            },
-            {
-              "id": "organize",
-              "options": {
-                "renameByName": {
-                  "id": "_rowid",
-                  "nodeId": "id",
-                  "edgeId": "id",
-                  "duration_ms": "mainstat"
-                },
-                "excludeByName": {
-                  "labels": true,
-                  "labelTypes": true,
-                  "Line": true,
-                  "tsNs": true
-                },
-                "indexByName": {}
-              }
             }
           ]
         },
@@ -1408,7 +1391,7 @@ data:
             "type": "loki",
             "uid": "loki"
           },
-          "description": "The same run on a clock: one lane per actor, filled where that actor was emitting. The handoff IS the picture — implementation runs, hands back, testing runs, and task-orchestration is the sparse lane that wakes between them and keeps going after both are done (deploy, test job, teardown, PR). Colour is how much it said in that bucket, which is why a claude-session reads as a solid block. Click a lane to focus the dashboard on that actor.",
+          "description": "The same run on a clock: one lane per actor, filled where that actor was emitting. The handoff IS the picture — implementation runs, hands back, testing runs, and task-orchestration is the sparse lane that wakes between them and keeps going after both are done (deploy, test job, teardown, PR). Colour is how much it said in that bucket, which is why a claude-session reads as a solid block. Click a lane to focus the dashboard on that actor. Wall-clock is the axis, so this panel is only legible once the dashboard's time range is near the run's own length: pick a run above, then zoom the range onto it.",
           "gridPos": {
             "h": 11,
             "w": 14,
@@ -1468,7 +1451,8 @@ data:
               "expr": "sum by (service_name, actor) (count_over_time({service_name=~\"$service\"} | correlation_id =~ \"$correlation\" | label_format actor=`{{ trimPrefix \"BNK.RLVR.CAP.SUP.002.BEN-\" .service_name }}` [$__interval])) > 0",
               "legendFormat": "{{actor}}"
             }
-          ]
+          ],
+          "maxDataPoints": 1200
         },
         {
           "id": 110,
