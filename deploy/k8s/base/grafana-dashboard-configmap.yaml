@@ -1298,7 +1298,7 @@ data:
         {
           "id": 106,
           "title": "Call map — who was involved, and who called whom",
-          "type": "nodegraph",
+          "type": "nodeGraph",
           "datasource": {
             "type": "loki",
             "uid": "loki"
