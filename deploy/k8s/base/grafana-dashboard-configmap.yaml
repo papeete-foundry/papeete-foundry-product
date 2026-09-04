@@ -1329,15 +1329,26 @@ data:
             "zoomMode": "cooperative"
           },
           "fieldConfig": {
-            "defaults": {
-              "links": [
-                {
-                  "title": "Focus this dashboard on this actor",
-                  "url": "/d/bnk-rlvr-cap-sup-002-ben-development?var-service=${__data.fields.id}&var-task=${task}&var-correlation=${correlation}&var-step=${step}&var-grep=${grep}&${__url_time_range}"
-                }
-              ]
-            },
-            "overrides": []
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "title"
+                },
+                "properties": [
+                  {
+                    "id": "links",
+                    "value": [
+                      {
+                        "title": "Focus this dashboard on this actor",
+                        "url": "/d/bnk-rlvr-cap-sup-002-ben-development?var-service=${__data.fields.id}&${task:queryparam}&${correlation:queryparam}&${step:queryparam}&${grep:queryparam}&${__url_time_range}"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
           },
           "targets": [
             {
@@ -1443,7 +1454,7 @@ data:
               "links": [
                 {
                   "title": "Focus this dashboard on this actor",
-                  "url": "/d/bnk-rlvr-cap-sup-002-ben-development?var-service=${__field.labels.service_name}&var-task=${task}&var-correlation=${correlation}&var-step=${step}&var-grep=${grep}&${__url_time_range}"
+                  "url": "/d/bnk-rlvr-cap-sup-002-ben-development?var-service=${__field.labels.service_name}&${task:queryparam}&${correlation:queryparam}&${step:queryparam}&${grep:queryparam}&${__url_time_range}"
                 }
               ]
             },
@@ -1538,7 +1549,7 @@ data:
               "links": [
                 {
                   "title": "Open this actor's claude session as a terminal",
-                  "url": "/d/bnk-rlvr-cap-sup-002-ben-development?var-service=${__data.fields.service_name}&var-task=${task}&var-correlation=${correlation}&var-step=${step}&var-grep=${grep}&${__url_time_range}&viewPanel=131"
+                  "url": "/d/bnk-rlvr-cap-sup-002-ben-development?var-service=${__data.fields.service_name}&${task:queryparam}&${correlation:queryparam}&${step:queryparam}&${grep:queryparam}&${__url_time_range}&viewPanel=131"
                 }
               ]
             },
