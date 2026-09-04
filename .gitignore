@@ -1,0 +1,4 @@
+# Serena's per-project workspace — a coding agent's local state: its language-server cache, its
+# own memories, and a machine-specific project.local.yml. None of it describes this product and
+# all of it is regenerated on demand, so it never belongs in the repo.
+.serena/
