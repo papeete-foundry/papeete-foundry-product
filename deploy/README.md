@@ -133,16 +133,25 @@ branch, image, namespace, the exception text — are the point. And **the sessio
 renders each `claude` session the way the CLI prints it rather than as the JSON it arrives in:
 
 ```
-▶ claude claude-sonnet-5   ·   /tmp/…-TASK-CORR-001-26uh26lk
-⏺ Read(/tmp/…/backend/pyproject.toml)
-  ⎿ 1	[project]
-    2	name = "reliever-beneficiary-anchor"
-● Now let me implement the version resolution in routers.py.
-⏺ Bash(cd backend && python3 -c "…")
-  ⎿ ✘ Exit code 1
-    /bin/bash: line 1: cd: backend: No such file or directory
-■ success   ·   27 turns   ·   113.1s   ·   $0.7077   ·   3008→6335 tok
+▶ claude claude-sonnet-5   ·   /tmp/…-TASK-DASH-001-c_lu5yp3
+● I'll start by reading the existing test suite and the capability context.
+⏺ Bash(find backend/tests -type f | sort)
+  ⎿ find: ‘backend/tests’: No such file or directory
+⏺ Read(process.json)
+  ⎿ 1 {"schema_version":"1.0.0","engine":{"name":"kpack",…   … +3 lines
+⏺ Write(backend/tests/test_health.py)
+  ⎿ File created successfully at: backend/tests/test_health.py
+■ success   ·   26 turns   ·   166.3s   ·   $1.4821   ·   3163→9854 tok
 ```
+
+**A tool result is collapsed, the way the CLI collapses one.** This matters more than it
+sounds: a single `Read` of a capability context file used to dump *40 kB of JSON* into the
+panel, and one of those is enough to bury the whole session. Each `⎿` is now one line with
+`… +N lines` after it (`count` over the newlines), the `/tmp/<workdir>/` prefix every path
+carries is stripped, and a turn that carries nothing — an empty thinking block — is dropped
+rather than rendered as a bare `✻ thinking…`. What is left is the session, not the log; the
+untouched record is always one panel down, in *Dive into a step*. Setting `$grep` to `^●`
+narrows it to claude's prose alone.
 
 That is `line_format` doing the work in the query, not a change to what the actors emit. Two
 things make it honest rather than a guess. The CLI emits one message per content block, so every
