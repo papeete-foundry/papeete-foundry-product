@@ -37,3 +37,12 @@ actorDeployOverrides:
   - actor: BNK.RLVR.CAP.BSP.001.TIE-testing
     type: local
     path: ../BNK.RLVR.CAP.BSP.001.TIE-testing
+  - actor: BNK.RLVR.CAP.CHN.001.DSH-implementation
+    type: local
+    path: ../BNK.RLVR.CAP.CHN.001.DSH-implementation
+  - actor: BNK.RLVR.CAP.CHN.001.DSH-task-orchestration
+    type: local
+    path: ../BNK.RLVR.CAP.CHN.001.DSH-task-orchestration
+  - actor: BNK.RLVR.CAP.CHN.001.DSH-testing
+    type: local
+    path: ../BNK.RLVR.CAP.CHN.001.DSH-testing
