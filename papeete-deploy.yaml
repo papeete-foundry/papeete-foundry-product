@@ -19,3 +19,12 @@ actorDeployOverrides:
   - actor: BNK.RLVR.CAP.SUP.002.BEN-testing
     type: local
     path: ../BNK.RLVR.CAP.SUP.002.BEN-testing
+  - actor: BNK.RLVR.CAP.BSP.001.SCO-implementation
+    type: local
+    path: ../BNK.RLVR.CAP.BSP.001.SCO-implementation
+  - actor: BNK.RLVR.CAP.BSP.001.SCO-task-orchestration
+    type: local
+    path: ../BNK.RLVR.CAP.BSP.001.SCO-task-orchestration
+  - actor: BNK.RLVR.CAP.BSP.001.SCO-testing
+    type: local
+    path: ../BNK.RLVR.CAP.BSP.001.SCO-testing
