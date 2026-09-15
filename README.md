@@ -14,8 +14,9 @@ named here by identity and a version query alone, never a path or a pre-resolved
 |---|---|
 | `BNK.RLVR.CAP.SUP.002.BEN`, Beneficiary Identity Anchor | `BNK.RLVR.CAP.SUP.002.BEN-{implementation,testing,task-orchestration}` |
 | `BNK.RLVR.CAP.BSP.001.SCO`, Behavioural Scoring | `BNK.RLVR.CAP.BSP.001.SCO-{implementation,testing,task-orchestration}` |
+| `BNK.RLVR.CAP.BSP.001.TIE`, Tier Management | `BNK.RLVR.CAP.BSP.001.TIE-{implementation,testing,task-orchestration}` |
 
-`GetSecrets.sh --capability <KEY>` seeds each capability's five Secrets.
+`GetSecrets.sh --k8s` seeds every actor's Secrets from the foundry's two shared credentials, deriving the actors from `product.yaml`.
 
 Resolving these queries against a real registry and actually running them is
 [`papeete-deploy`](https://github.com/papeete-hub/papeete-deploy)'s job — see [`deploy/`](./deploy).

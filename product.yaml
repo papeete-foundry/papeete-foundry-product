@@ -30,3 +30,15 @@ actors:
     label: alpha
     version: latest
     recipe: develop
+  - name: BNK.RLVR.CAP.BSP.001.TIE-implementation
+    label: alpha
+    version: latest
+    recipe: develop
+  - name: BNK.RLVR.CAP.BSP.001.TIE-task-orchestration
+    label: alpha
+    version: latest
+    recipe: develop
+  - name: BNK.RLVR.CAP.BSP.001.TIE-testing
+    label: alpha
+    version: latest
+    recipe: develop
