@@ -42,3 +42,15 @@ actors:
     label: alpha
     version: latest
     recipe: develop
+  - name: BNK.RLVR.CAP.CHN.001.DSH-implementation
+    label: alpha
+    version: latest
+    recipe: develop
+  - name: BNK.RLVR.CAP.CHN.001.DSH-task-orchestration
+    label: alpha
+    version: latest
+    recipe: develop
+  - name: BNK.RLVR.CAP.CHN.001.DSH-testing
+    label: alpha
+    version: latest
+    recipe: develop

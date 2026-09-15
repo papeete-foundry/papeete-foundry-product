@@ -15,6 +15,7 @@ named here by identity and a version query alone, never a path or a pre-resolved
 | `BNK.RLVR.CAP.SUP.002.BEN`, Beneficiary Identity Anchor | `BNK.RLVR.CAP.SUP.002.BEN-{implementation,testing,task-orchestration}` |
 | `BNK.RLVR.CAP.BSP.001.SCO`, Behavioural Scoring | `BNK.RLVR.CAP.BSP.001.SCO-{implementation,testing,task-orchestration}` |
 | `BNK.RLVR.CAP.BSP.001.TIE`, Tier Management | `BNK.RLVR.CAP.BSP.001.TIE-{implementation,testing,task-orchestration}` |
+| `BNK.RLVR.CAP.CHN.001.DSH`, Beneficiary Dashboard | `BNK.RLVR.CAP.CHN.001.DSH-{implementation,testing,task-orchestration}` |
 
 `GetSecrets.sh --k8s` seeds every actor's Secrets from the foundry's two shared credentials, deriving the actors from `product.yaml`.
 
