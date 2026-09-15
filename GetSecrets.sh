@@ -118,6 +118,10 @@ K8S_SECRET_ACR_PUSH="acr-push"
 ORG="papeete-foundry"
 REPO_IMPL="BNK.RLVR.CAP.SUP.002.BEN-implementation"
 REPO_TEST="BNK.RLVR.CAP.SUP.002.BEN-testing"
+# Where the task cards live. The orchestration actor never touches them; when round 0 stops on
+# open questions or objections it opens an issue here, labelled task:<capability>/<task_id>
+# (ADR-FTOA-0004), because callers name this repo as `report_to`.
+REPO_BACKLOG="reliever-implementation"
 
 # The five credentials this script OWNS, in collection order. Each one is minted by a human in a
 # browser and exists nowhere else — which is what the TTY gate above protects.
@@ -216,6 +220,30 @@ check_repo() {
   esac
 }
 
+# Probe whether a token may CREATE on an endpoint, without creating anything.
+#
+# WHY A PROBE. A fine-grained PAT's per-permission grants (Issues, Pull requests) are not in the
+# `permissions` block `GET /repos/{repo}` returns — that block says what the USER may do, so a
+# token missing "Issues: write" still reads as push:true there, and the first sign of it used to be
+# a live round 0 whose issue silently failed to open. So ask the endpoint itself: POST an empty
+# object. GitHub authorises before it validates, so a token holding the permission gets 422 (the
+# body lacks a title / head / base) and one without gets 403 — and nothing is ever created.
+#
+# check_create <token> <repo> <label> <endpoint>   e.g. check_create "$tok" "$REPO_BACKLOG" issues issues
+check_create() {
+  local tok="$1" repo="$2" what="$3" endpoint="$4" code
+  code="$(printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\nrequest = "POST"\ndata = "{}"\nurl = "https://api.github.com/repos/%s/%s/%s"\n' \
+            "$tok" "$ORG" "$repo" "$endpoint" \
+          | curl -sS --config - -o /dev/null -w '%{http_code}' 2>/dev/null || true)"
+  case "$code" in
+    422) printf '      %s✓%s %-52s %s: write\n' "$grn" "$rst" "$repo" "$what" ;;
+    403) printf '      %s✗%s %-52s %s: NEEDS READ AND WRITE\n' "$red" "$rst" "$repo" "$what"; return 1 ;;
+    404) printf '      %s✗%s %-52s %s: not visible to this token\n' "$red" "$rst" "$repo" "$what"; return 1 ;;
+    401) printf '      %s✗%s %-52s token rejected (401)\n' "$red" "$rst" "$repo"; return 1 ;;
+    *)   printf '      %s?%s %-52s %s: unexpected HTTP %s\n' "$ylw" "$rst" "$repo" "$what" "$code"; return 1 ;;
+  esac
+}
+
 # Validate a GitHub token against the scopes its role actually needs.
 validate_github() {
   local role="$1" tok="$2" rc=0
@@ -234,7 +262,15 @@ validate_github() {
       check_repo "$tok" reliever-design     read  || rc=1
       ;;
     BEN_TASK_ORCHESTRATION_GITHUB_TOKEN)
-      check_repo "$tok" "$REPO_IMPL"        read  || rc=1
+      # Clones impl/<task_id> read-only, and opens the implementation PR.
+      check_repo   "$tok" "$REPO_IMPL"      read                        || rc=1
+      check_create "$tok" "$REPO_IMPL"      "pull requests" pulls       || rc=1
+      # Opens the paired testing PR, and commits the run log there when it is too long to inline.
+      check_repo   "$tok" "$REPO_TEST"      write                       || rc=1
+      check_create "$tok" "$REPO_TEST"      "pull requests" pulls       || rc=1
+      # Sends a stopped round 0 to the backlog as an issue (ADR-FTOA-0004).
+      check_repo   "$tok" "$REPO_BACKLOG"   read                        || rc=1
+      check_create "$tok" "$REPO_BACKLOG"   issues          issues      || rc=1
       ;;
   esac
   return $rc
@@ -317,12 +353,20 @@ COMMON
       ;;
     BEN_TASK_ORCHESTRATION_GITHUB_TOKEN)
       cat <<COMMON
-    Select this 1 repository:
+    Select these 3 repositories:
         $REPO_IMPL
+        $REPO_TEST
+        $REPO_BACKLOG
 
     Repository permissions:
-        Contents .................... Read-only
+        Contents .................... Read and write
+        Issues ...................... Read and write
         Pull requests ............... Read and write
+
+  Why each: it clones $REPO_IMPL and opens the implementation PR there; opens
+  the paired PR on $REPO_TEST and commits the test log to its branch (hence Contents
+  write — one permission set covers every selected repo); and when round 0 stops on open
+  questions or objections, opens an issue on $REPO_BACKLOG. It never edits a task card.
 COMMON
       ;;
   esac
