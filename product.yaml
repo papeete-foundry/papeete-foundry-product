@@ -18,3 +18,15 @@ actors:
     label: alpha
     version: latest
     recipe: develop
+  - name: BNK.RLVR.CAP.BSP.001.SCO-implementation
+    label: alpha
+    version: latest
+    recipe: develop
+  - name: BNK.RLVR.CAP.BSP.001.SCO-task-orchestration
+    label: alpha
+    version: latest
+    recipe: develop
+  - name: BNK.RLVR.CAP.BSP.001.SCO-testing
+    label: alpha
+    version: latest
+    recipe: develop
