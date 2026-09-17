@@ -104,15 +104,41 @@ PYEOF
 
 # One line per actor: `<capability id>|<role>`, for every actor named `<CAP>-<role>` with a role
 # this script knows. Anything else in the product is not one of these actors and needs nothing here.
+# `<cap>|<role>|<repo>` per actor. The repo is NOT `<cap>-<role>`: an actor's name and the
+# repository it pushes to stopped being the same string the day a capability's three actors moved
+# into one repository (BNK.RLVR.CAP.BSP.001.TIE). It is read from that actor's own sidecar — the
+# one place that states it — found through papeete-deploy.yaml, which already says where each
+# actor's folder is. `<cap>-<role>` remains the fallback for an actor this file cannot locate,
+# which is exactly the convention the sidecar would have spelled anyway.
 actors_from_product() {
   [ -f "$PRODUCT_YAML" ] || return 1
-  python3 - "$PRODUCT_YAML" <<'PYEOF'
+  python3 - "$PRODUCT_YAML" "$SCRIPT_DIR/papeete-deploy.yaml" <<'PYEOF'
 import re, sys, yaml
-doc = yaml.safe_load(open(sys.argv[1])) or {}
+from pathlib import Path
+
+product, deploy_cfg = Path(sys.argv[1]), Path(sys.argv[2])
+doc = yaml.safe_load(product.read_text()) or {}
+
+folders = {}
+if deploy_cfg.is_file():
+    cfg = yaml.safe_load(deploy_cfg.read_text()) or {}
+    for entry in cfg.get("actorDeployOverrides") or []:
+        if entry.get("type") == "local" and entry.get("path"):
+            folders[str(entry.get("actor"))] = deploy_cfg.parent / str(entry["path"])
+
+def repo_of(name, default):
+    sidecar = folders.get(name, Path("/nonexistent")) / "actor-agentic-context.yaml"
+    if not sidecar.is_file():
+        return default
+    declared = (yaml.safe_load(sidecar.read_text()) or {}).get("source_repo")
+    # `<owner>/<repo>`; the caller prefixes the org itself, so hand back the repo half only.
+    return str(declared).partition("/")[2] if declared else default
+
 for actor in doc.get("actors") or []:
-    m = re.fullmatch(r"(.+)-(implementation|testing|task-orchestration)", str(actor.get("name", "")))
+    name = str(actor.get("name", ""))
+    m = re.fullmatch(r"(.+)-(implementation|testing|task-orchestration)", name)
     if m:
-        print(f"{m.group(1)}|{m.group(2)}")
+        print(f"{m.group(1)}|{m.group(2)}|{repo_of(name, name)}")
 PYEOF
 }
 
@@ -159,11 +185,11 @@ cap_slug() { printf '%s' "$1" | tr '[:upper:].' '[:lower:]-'; }
 
 # The product's actors, loaded once: ACTOR_CAPS[i] and ACTOR_ROLES[i].
 load_actors() {
-  ACTOR_CAPS=(); ACTOR_ROLES=()
+  ACTOR_CAPS=(); ACTOR_ROLES=(); ACTOR_REPOS=()
   local line
-  while IFS='|' read -r cap role; do
+  while IFS='|' read -r cap role repo; do
     [ -n "$cap" ] || continue
-    ACTOR_CAPS+=("$cap"); ACTOR_ROLES+=("$role")
+    ACTOR_CAPS+=("$cap"); ACTOR_ROLES+=("$role"); ACTOR_REPOS+=("${repo:-$cap-$role}")
   done < <(actors_from_product || die "could not read the actors from $PRODUCT_YAML")
   [ "${#ACTOR_CAPS[@]}" -gt 0 ] || die "$PRODUCT_YAML names no <CAP>-{implementation,testing,task-orchestration} actor"
 }
@@ -264,16 +290,34 @@ check_create() {
 # Validate the one GitHub token against everything the product's actors do with it: each
 # implementation and testing actor pushes to its own repo; each orchestrator opens PRs on both
 # and an issue on the backlog; every session reads the knowledge repos.
-validate_github() {
-  local tok="$1" rc=0 i repo seen=" "
+# The repository the actor serving `<cap>` in `<role>` actually pushes to.
+repo_for() {
+  local cap="$1" role="$2" i
   for i in "${!ACTOR_CAPS[@]}"; do
-    repo="${ACTOR_CAPS[$i]}-${ACTOR_ROLES[$i]}"
-    case "$seen" in *" $repo "*) continue ;; esac
-    seen="$seen$repo "
-    check_repo "$tok" "$repo" write || rc=1
+    if [ "${ACTOR_CAPS[$i]}" = "$cap" ] && [ "${ACTOR_ROLES[$i]}" = "$role" ]; then
+      printf '%s' "${ACTOR_REPOS[$i]}"; return 0
+    fi
+  done
+  printf '%s-%s' "$cap" "$role"
+}
+
+validate_github() {
+  local tok="$1" rc=0 i repo peer_repo peer seen=" " pr_seen=" "
+  for i in "${!ACTOR_CAPS[@]}"; do
+    repo="${ACTOR_REPOS[$i]}"
+    case "$seen" in *" $repo "*) ;; *)
+      seen="$seen$repo "
+      check_repo "$tok" "$repo" write || rc=1 ;;
+    esac
     if [ "${ACTOR_ROLES[$i]}" = task-orchestration ]; then
-      check_create "$tok" "${ACTOR_CAPS[$i]}-implementation" "pull requests" pulls || rc=1
-      check_create "$tok" "${ACTOR_CAPS[$i]}-testing"        "pull requests" pulls || rc=1
+      # The two PRs this actor opens. Both peers can now answer to ONE repository, so the pair is
+      # deduped — otherwise a consolidated capability checks the same repo twice and says so twice.
+      for peer in implementation testing; do
+        peer_repo="$(repo_for "${ACTOR_CAPS[$i]}" "$peer")"
+        case "$pr_seen" in *" $peer_repo "*) continue ;; esac
+        pr_seen="$pr_seen$peer_repo "
+        check_create "$tok" "$peer_repo" "pull requests" pulls || rc=1
+      done
     fi
   done
   for repo in "${REPOS_KNOWLEDGE[@]}"; do
