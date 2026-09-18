@@ -52,9 +52,22 @@
 # WHAT IT OWNS, AND WHAT IT ONLY INSTALLS
 #
 # It OWNS the two tokens: each is minted by a human in a browser and exists nowhere else, which
-# is exactly what the TTY gate protects. It does NOT own the registry credentials:
-# papeete-platform's modules/acr mints them and terraform holds them, so they are read from
+# is exactly what the TTY gate protects. It does NOT own the registry credential:
+# papeete-platform's modules/acr enables it and terraform holds it, so it is read from
 # `terraform output` at install time, never stored a second time.
+#
+# BOTH REGISTRY SECRETS HOLD THE REGISTRY'S ADMIN ACCOUNT
+#
+# The registry runs on ACR Basic (papeete-platform ADR-PL-0006), which has no scope maps and no
+# tokens. Its one credential is the admin account — examples/acr-local's `username` / `password` —
+# so acr-pull and acr-push hold the SAME value. There are two Secrets because the actors' manifests
+# name both, not because there are two credentials. That credential is registry-wide and can
+# overwrite any tag, including through acr-pull. The way back to a read-only pull and a separate
+# push is an Entra service principal per role (AcrPull, AcrPush), not a SKU upgrade.
+#
+# If terraform cannot produce that credential (an output is missing, or empty, as it is right after
+# the apply that first enables the admin account), --install, --k8s and collect stop with an error
+# rather than skip the two Secrets, and --status marks both ✗.
 #
 # The canonical store (~/.config/papeete-foundry-local/secrets.env, 0600) lives outside every git
 # repo. A store written by an earlier version of this script (per-actor BEN_* variables) is still
@@ -146,9 +159,10 @@ K8S_NS=""          # resolved at the bottom, after any --namespace has been pars
 
 VARS=(FOUNDRY_GITHUB_TOKEN FOUNDRY_CLAUDE_TOKEN)
 
-# The registry pull credential every actor references as imagePullSecrets, and the PUSH credential
-# the two building actors mount as $DOCKER_CONFIG/config.json (buildctl resolves registry auth
-# client-side; buildkitd does not authenticate on a remote client's behalf).
+# The two registry Secrets, both holding the admin account (see the header): acr-pull, which every
+# actor references as imagePullSecrets, and acr-push, which the two building actors mount as
+# $DOCKER_CONFIG/config.json (buildctl resolves registry auth client-side; buildkitd does not
+# authenticate on a remote client's behalf).
 K8S_SECRET_ACR_PULL="acr-pull"
 K8S_SECRET_ACR_PUSH="acr-push"
 
@@ -328,26 +342,81 @@ validate_github() {
   return $rc
 }
 
-# The registry credentials, straight from the source that mints them. Values land in shell
-# variables and are never printed.
+# The registry's one credential, the admin account, straight from the terraform state that holds
+# it. Values land in shell variables and are never printed. On failure ACR_PROBLEM says which
+# output let it down, for the caller to report; every output must be present AND non-empty, because
+# the apply that first enables the admin account reports success with empty strings.
 acr_from_terraform() {
-  command -v terraform >/dev/null 2>&1 || { info "  ${ylw}–${rst} terraform not on PATH"; return 1; }
-  [ -d "$ACR_TF_DIR" ] || { info "  ${ylw}–${rst} no ACR state at $ACR_TF_DIR"; return 1; }
-  ACR_LOGIN_SERVER="$(terraform -chdir="$ACR_TF_DIR" output -raw login_server 2>/dev/null)" || return 1
-  ACR_PULL_USERNAME="$(terraform -chdir="$ACR_TF_DIR" output -raw pull_username 2>/dev/null)" || return 1
-  ACR_PULL_PASSWORD="$(terraform -chdir="$ACR_TF_DIR" output -raw pull_password 2>/dev/null)" || return 1
-  ACR_PUSH_USERNAME="$(terraform -chdir="$ACR_TF_DIR" output -raw push_username 2>/dev/null)" || return 1
-  ACR_PUSH_PASSWORD="$(terraform -chdir="$ACR_TF_DIR" output -raw push_password 2>/dev/null)" || return 1
-  [ -n "$ACR_LOGIN_SERVER" ] && [ -n "$ACR_PULL_USERNAME" ] && [ -n "$ACR_PULL_PASSWORD" ] \
-    && [ -n "$ACR_PUSH_USERNAME" ] && [ -n "$ACR_PUSH_PASSWORD" ]
+  ACR_LOGIN_SERVER=""; ACR_USERNAME=""; ACR_PASSWORD=""; ACR_PROBLEM=""
+  if ! command -v terraform >/dev/null 2>&1; then
+    ACR_PROBLEM="terraform is not on PATH"; return 1
+  fi
+  if [ ! -d "$ACR_TF_DIR" ]; then
+    ACR_PROBLEM="no ACR state at $ACR_TF_DIR"; return 1
+  fi
+  # Output NAMES only: the values go into python on a pipe and only the names come out.
+  local names out val
+  names=" $(terraform -chdir="$ACR_TF_DIR" output -json 2>/dev/null \
+            | python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)))' 2>/dev/null) " || names=" "
+  if [ "$names" = "  " ] || [ "$names" = " " ]; then
+    ACR_PROBLEM="no terraform outputs in $ACR_TF_DIR — apply papeete-platform's examples/acr-local"; return 1
+  fi
+  for out in login_server username password; do
+    case "$names" in
+      *" $out "*) ;;
+      *) ACR_PROBLEM="terraform output '$out' is missing in $ACR_TF_DIR — examples/acr-local predates ADR-PL-0006; pull papeete-platform and apply it"
+         return 1 ;;
+    esac
+    if ! val="$(terraform -chdir="$ACR_TF_DIR" output -raw "$out" 2>/dev/null)"; then
+      ACR_PROBLEM="cannot read terraform output '$out' in $ACR_TF_DIR (null when admin_enabled is off)"
+      return 1
+    fi
+    if [ -z "$val" ]; then
+      ACR_PROBLEM="terraform output '$out' is empty in $ACR_TF_DIR — if the admin account was just enabled, apply it a second time (modules/acr README)"
+      return 1
+    fi
+    case "$out" in
+      login_server) ACR_LOGIN_SERVER="$val" ;;
+      username)     ACR_USERNAME="$val" ;;
+      password)     ACR_PASSWORD="$val" ;;
+    esac
+  done
 }
 
-# Validate the registry pull token by asking for a pull-scoped bearer token on each actor's own
-# image repository, the same exchange a kubelet performs.
+# Does secret/<name> hold exactly the credential terraform holds? The Secret's data goes from
+# kubectl into python on a pipe and comes back as a SHA-256 of `user:password`, compared here with
+# the same hash of terraform's; neither value is printed. Every entry form kubelet honours must
+# agree — `auth` wins over username/password when both are set — so a half-patched Secret fails.
+secret_holds_acr_credential() {
+  local name="$1" have want
+  have="$(kubectl -n "$K8S_NS" get "secret/$name" -o jsonpath='{.data.\.dockerconfigjson}' 2>/dev/null \
+    | python3 -c '
+import base64, hashlib, json, sys
+try:
+    auths = json.loads(base64.b64decode(sys.stdin.read())).get("auths") or {}
+    entry = auths.get(sys.argv[1]) or auths.get("https://" + sys.argv[1]) or {}
+    pairs = set()
+    if entry.get("username") or entry.get("password"):
+        pairs.add((entry.get("username") or "", entry.get("password") or ""))
+    if entry.get("auth"):
+        user, _, pw = base64.b64decode(entry["auth"]).decode().partition(":")
+        pairs.add((user, pw))
+    (user, pw), = pairs
+    print(hashlib.sha256(f"{user}:{pw}".encode()).hexdigest() if user and pw else "none")
+except Exception:
+    print("none")
+' "$ACR_LOGIN_SERVER" || true)"
+  want="$(printf '%s:%s' "$ACR_USERNAME" "$ACR_PASSWORD" | sha256sum | cut -d' ' -f1)"
+  [ "$have" = "$want" ]
+}
+
+# Validate the admin credential by asking for a pull-scoped bearer token on each actor's own image
+# repository, the same exchange a kubelet performs. There is one credential, so this proves the
+# value acr-push carries as well.
 validate_acr() {
-  local server="${ACR_LOGIN_SERVER:-}" user="${ACR_PULL_USERNAME:-}" pass="${ACR_PULL_PASSWORD:-}"
+  local server="${ACR_LOGIN_SERVER:-}" user="${ACR_USERNAME:-}" pass="${ACR_PASSWORD:-}"
   if [ -z "$server" ] || [ -z "$user" ] || [ -z "$pass" ]; then
-    printf '      %s✗%s registry credentials incomplete\n' "$red" "$rst"; return 1
+    printf '      %s✗%s registry credential incomplete\n' "$red" "$rst"; return 1
   fi
   local rc=0 i path code
   for i in "${!ACTOR_CAPS[@]}"; do
@@ -356,7 +425,7 @@ validate_acr() {
               "$user" "$pass" "$server" "$server" "$path" \
             | curl -sS --config - -o /dev/null -w '%{http_code}' 2>/dev/null || true)"
     case "$code" in
-      200) printf '      %s✓%s %-52s pull token accepted\n' "$grn" "$rst" "$path" ;;
+      200) printf '      %s✓%s %-52s admin credential accepted\n' "$grn" "$rst" "$path" ;;
       401) printf '      %s✗%s %-52s rejected (401)\n' "$red" "$rst" "$path"; rc=1 ;;
       *)   printf '      %s✗%s %-52s HTTP %s\n' "$red" "$rst" "$path" "$code"; rc=1 ;;
     esac
@@ -477,34 +546,37 @@ apply_token_secret() {
   info "  ${grn}✓${rst} applied secret/$name in namespace $K8S_NS"
 }
 
-# The registry pull credential, as the dockerconfigjson type kubelet expects. The password does
-# reach kubectl's argv here — `create secret docker-registry` has no --from-file equivalent — so
-# it is the one value on this path that a local `ps` could catch, and it is the least privileged
-# of the set: read-only, scoped to this product's repository paths.
-apply_acr_pull_secret() {
-  if ! acr_from_terraform; then
-    info "  ${ylw}–${rst} skipping secret/$K8S_SECRET_ACR_PULL and secret/$K8S_SECRET_ACR_PUSH — could not read the registry"
-    info "     credentials from $ACR_TF_DIR."
-    info "     Apply papeete-platform's examples/acr-local first, then re-run './GetSecrets.sh --k8s'."
-    return 0
-  fi
-  kubectl -n "$K8S_NS" create secret docker-registry "$K8S_SECRET_ACR_PULL" \
-      --docker-server="$ACR_LOGIN_SERVER" \
-      --docker-username="$ACR_PULL_USERNAME" \
-      --docker-password="$ACR_PULL_PASSWORD" \
-      --dry-run=client -o yaml \
+# One registry Secret, as the dockerconfigjson kubelet and buildctl read, from the credential
+# acr_from_terraform loaded. The JSON is built into a 0600 temp file and handed over with
+# --from-file, like the tokens: `create secret docker-registry` would put the password in kubectl's
+# argv, where a local `ps` catches it, and that password is the registry's admin account.
+apply_acr_secret() {
+  local name="$1" tmp
+  tmp="$(mktemp)"
+  chmod 600 "$tmp"
+  printf '%s\n%s\n%s\n' "$ACR_LOGIN_SERVER" "$ACR_USERNAME" "$ACR_PASSWORD" | python3 -c '
+import base64, json, sys
+server, user, pw = sys.stdin.read().split("\n")[:3]
+auth = base64.b64encode(f"{user}:{pw}".encode()).decode()
+with open(sys.argv[1], "w") as f:
+    json.dump({"auths": {server: {"username": user, "password": pw, "auth": auth}}}, f)
+' "$tmp"
+  kubectl -n "$K8S_NS" create secret generic "$name" --type=kubernetes.io/dockerconfigjson \
+      --from-file=.dockerconfigjson="$tmp" --dry-run=client -o yaml \
     | kubectl apply -f - >/dev/null
-  info "  ${grn}✓${rst} applied secret/$K8S_SECRET_ACR_PULL in namespace $K8S_NS"
+  rm -f "$tmp"
+  info "  ${grn}✓${rst} applied secret/$name in namespace $K8S_NS  ${dim}(registry admin account)${rst}"
 }
 
-apply_acr_push_secret() {
-  kubectl -n "$K8S_NS" create secret docker-registry "$K8S_SECRET_ACR_PUSH" \
-      --docker-server="$ACR_LOGIN_SERVER" \
-      --docker-username="$ACR_PUSH_USERNAME" \
-      --docker-password="$ACR_PUSH_PASSWORD" \
-      --dry-run=client -o yaml \
-    | kubectl apply -f - >/dev/null
-  info "  ${grn}✓${rst} applied secret/$K8S_SECRET_ACR_PUSH in namespace $K8S_NS"
+# Both registry Secrets from the ONE credential. A credential terraform cannot produce is an error,
+# not a skip: skipping is how acr-push kept a destroyed Premium push token for weeks while every
+# run of this script looked fine.
+apply_acr_secrets() {
+  acr_from_terraform || die "cannot write secret/$K8S_SECRET_ACR_PULL or secret/$K8S_SECRET_ACR_PUSH in namespace $K8S_NS:
+   $ACR_PROBLEM.
+   Fix papeete-platform's examples/acr-local, then re-run './GetSecrets.sh --k8s'."
+  apply_acr_secret "$K8S_SECRET_ACR_PULL"
+  apply_acr_secret "$K8S_SECRET_ACR_PUSH"
 }
 
 apply_k8s() {
@@ -524,8 +596,7 @@ apply_k8s() {
     v="FOUNDRY_${kind}_TOKEN"
     apply_token_secret "$name" "${!v}"
   done < <(secrets_needed)
-  apply_acr_pull_secret
-  acr_from_terraform >/dev/null 2>&1 && apply_acr_push_secret
+  apply_acr_secrets
 }
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
@@ -568,11 +639,13 @@ mode_status() {
   local rc=0
   hdr "Live validation of FOUNDRY_GITHUB_TOKEN against GitHub"
   validate_github "$FOUNDRY_GITHUB_TOKEN" || rc=1
-  printf '  %s\n' "registry pull token (from $ACR_TF_DIR)"
+  printf '  %s\n' "registry admin credential, for acr-pull and acr-push (from $ACR_TF_DIR)"
+  local acr_ok=0
   if acr_from_terraform; then
+    acr_ok=1
     validate_acr || rc=1
   else
-    printf '      %s✗%s could not read it — apply papeete-platform/examples/acr-local\n' "$red" "$rst"
+    printf '      %s✗%s %s\n' "$red" "$rst" "$ACR_PROBLEM"
     rc=1
   fi
   info ""
@@ -588,7 +661,23 @@ mode_status() {
         printf '  %s✗%s secret/%-52s absent in ns %s\n' "$red" "$rst" "$name" "$K8S_NS"
         rc=1
       fi
-    done < <(secrets_needed; printf '%s|\n%s|\n' "$K8S_SECRET_ACR_PULL" "$K8S_SECRET_ACR_PUSH")
+    done < <(secrets_needed)
+    # The registry Secrets are ✓ only when they hold what terraform holds now. Existing is not
+    # enough: a Secret left behind by a rotated credential exists, and cannot pull or push.
+    for name in "$K8S_SECRET_ACR_PULL" "$K8S_SECRET_ACR_PUSH"; do
+      if [ "$acr_ok" != 1 ]; then
+        printf '  %s✗%s secret/%-52s cannot be derived — see the registry credential above\n' "$red" "$rst" "$name"
+        rc=1
+      elif ! kubectl -n "$K8S_NS" get "secret/$name" >/dev/null 2>&1; then
+        printf '  %s✗%s secret/%-52s absent in ns %s\n' "$red" "$rst" "$name" "$K8S_NS"
+        rc=1
+      elif secret_holds_acr_credential "$name"; then
+        printf '  %s✓%s secret/%-52s ns %s, holds the registry admin credential\n' "$grn" "$rst" "$name" "$K8S_NS"
+      else
+        printf '  %s✗%s secret/%-52s STALE in ns %s — not the credential terraform holds; run ./GetSecrets.sh --k8s\n' "$red" "$rst" "$name" "$K8S_NS"
+        rc=1
+      fi
+    done
   else
     info "  ${ylw}–${rst} no reachable cluster, cannot report the Secrets"
   fi
@@ -709,7 +798,7 @@ mode_k8s() {
   apply_k8s
 }
 
-usage() { sed -n '2,76p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # --namespace may appear before or after the mode; everything else is a mode.
 mode=""
