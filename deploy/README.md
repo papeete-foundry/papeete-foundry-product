@@ -34,16 +34,18 @@ included, since this one exists to be thrown away — with
 
 Three things have to exist before a first deploy, none of them per-actor:
 
-1. **A registry, and a builder.** `papeete-platform`'s `examples/acr-local` creates the ACR plus
-   its push and pull tokens; `examples/buildkit-local` runs rootless buildkitd and hands it the
-   push credential (`ADR-PL-0002`). Two of the three actors build the capability's component
+1. **A registry, and a builder.** `papeete-platform`'s `examples/acr-local` creates the ACR on
+   Basic with its admin account as the one credential (`ADR-PL-0006`); `examples/buildkit-local`
+   runs rootless buildkitd and hands it that credential (`ADR-PL-0002`). Two of the three actors build the capability's component
    images through that builder — no Docker daemon is involved, and no node exposes a socket.
 2. **The `acr-pull` Secret in `foundry-local`.** Every actor references it as `imagePullSecrets`,
    and `task-orchestration` copies it into each ephemeral `test-<task_id>` namespace it creates.
 3. **The five token Secrets** each actor reads (`…-github`, `…-claude` per building actor, plus
    `task-orchestration`'s own), and **`acr-push`**, which the two building actors mount as their
    own `$DOCKER_CONFIG/config.json` — `buildctl` resolves registry auth client-side, so the
-   builder having a credential is not enough. `../GetSecrets.sh` creates all seven, into the
+   builder having a credential is not enough. `acr-pull` and `acr-push` hold the same credential,
+   the registry's admin account, so on Basic `acr-pull` can push too. `../GetSecrets.sh` creates
+   all seven from `examples/acr-local`'s terraform outputs and the store, into the
    namespace `product.yaml` declares (or `--namespace NS` for another instance), and its collect
    mode is TTY-only by design so no credential passes through an assistant's context.
 
